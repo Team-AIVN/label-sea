@@ -56,6 +56,12 @@ class TestTaskAPI(APITestCase):
             'comment_count': 0,
             'last_comment_updated_at': None,
             'unresolved_comment_count': 0,
+            'current_annotation': None,
+            'review_status': 'NOT_SELECTED',
+            'reviewed_at': None,
+            'reviewed_by': [],
+            'labeler': [],
+            'reviews': [],
         }
 
     def test_patch_task(self):
@@ -98,6 +104,8 @@ class TestTaskAPI(APITestCase):
             'comment_count': 0,
             'last_comment_updated_at': None,
             'unresolved_comment_count': 0,
+            'current_annotation': None,
+            'review_status': 'NOT_SELECTED',
         }
 
     def test_create_task_without_project_id_fails(self):

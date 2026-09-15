@@ -319,6 +319,11 @@ def apply_filters(queryset, filters, project, request):
             if result == 'continue':
                 continue
 
+            # labeler (Task.assignee)
+            result = add_user_filter(field_name == 'labeler', 'assignee', _filter, filter_expressions)
+            if result == 'continue':
+                continue
+
             # annotations results & predictions results
             if field_name in ['annotations_results', 'predictions_results']:
                 result = add_result_filter(field_name, _filter, filter_expressions, project)
@@ -588,6 +593,11 @@ def annotate_reviewed_by(queryset: TaskQuerySet) -> TaskQuerySet:
     return queryset.annotate(reviewed_by=newest_review_subquery('reviewer_id'))
 
 
+def annotate_labeler(queryset: TaskQuerySet) -> TaskQuerySet:
+    # The Data Manager column is called `labeler`; ordering needs it as a queryset field.
+    return queryset.annotate(labeler=F('assignee_id'))
+
+
 def annotate_completed_at(queryset: TaskQuerySet) -> TaskQuerySet:
     LseProject = load_func(settings.LSE_PROJECT)
     get_tasks_agreement_queryset = load_func(settings.GET_TASKS_AGREEMENT_QUERYSET)
@@ -780,6 +790,7 @@ settings.DATA_MANAGER_ANNOTATIONS_MAP = {
     'annotators': annotate_annotators,
     'reviewed_at': annotate_reviewed_at,
     'reviewed_by': annotate_reviewed_by,
+    'labeler': annotate_labeler,
     'annotations_ids': annotate_annotations_ids,
     'file_upload': file_upload,
     'draft_exists': annotate_draft_exists,

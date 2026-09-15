@@ -444,6 +444,7 @@
     "cancelled_annotations": "취소됨",
     "total_predictions": "예측",
     "annotators": "작업자",
+    "labeler": "라벨러",
     "reviewed_at": "검수됨",
     "reviewed_by": "검수자",
     "reviews": "상태",

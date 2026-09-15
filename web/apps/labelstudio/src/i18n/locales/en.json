@@ -444,6 +444,7 @@
     "cancelled_annotations": "Cancelled",
     "total_predictions": "Predictions",
     "annotators": "Annotated by",
+    "labeler": "Labeler",
     "reviewed_at": "Reviewed",
     "reviewed_by": "Reviewed by",
     "reviews": "Status",

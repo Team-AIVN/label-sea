@@ -160,6 +160,16 @@ def get_all_columns(project, *_):
             'project_defined': False,
         },
         {
+            'id': 'labeler',
+            'title': 'Labeler',
+            'type': 'List',
+            'target': 'tasks',
+            'help': 'Labeler the task is assigned to',
+            **({'schema': {'items': project_members}} if not remove_members_schema else {}),
+            'visibility_defaults': {'explore': True, 'labeling': False},
+            'project_defined': False,
+        },
+        {
             'id': 'reviewed_at',
             'title': 'Reviewed',
             'type': 'Datetime',
