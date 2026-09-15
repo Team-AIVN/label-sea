@@ -71,6 +71,21 @@ class WorkspaceListAPITests(APITestCase):
         assert 'hidden' not in titles
         assert visible.pk in {row['id'] for row in results}
 
+    def test_list_hides_workspaces_user_is_not_member_of(self):
+        joined = WorkspaceFactory(organization=self.organization, title='joined')
+        WorkspaceFactory(organization=self.organization, title='not-joined')
+        member = UserFactory()
+        _join_org(member, self.organization)
+        WorkspaceMember.objects.create(user=member, workspace=joined, role=WorkspaceMember.Role.MEMBER)
+
+        self.client.force_authenticate(user=member)
+        response = self.client.get('/api/workspaces/')
+
+        assert response.status_code == 200
+        payload = response.json()
+        results = payload['results'] if isinstance(payload, dict) and 'results' in payload else payload
+        assert {row['title'] for row in results} == {'joined'}
+
     def test_unauthenticated_request_denied(self):
         response = self.client.get('/api/workspaces/')
         assert response.status_code in (401, 403)

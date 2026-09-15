@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useHistory, useLocation, useParams } from "react-router";
 import { Button, useToast } from "@humansignal/ui";
@@ -54,7 +54,13 @@ const formatDate = (value) => {
 
 export const WorkspaceDetail = () => {
   const { t } = useTranslation();
-  const api = useAPI();
+  // useAPI() returns a new object whenever the provider's error state (or the toast
+  // context) changes. Loaders depending on it re-ran after every failed request and
+  // retried forever, so route calls through a ref and keep `api` stable for this page.
+  const apiContext = useAPI();
+  const apiRef = useRef(apiContext);
+  apiRef.current = apiContext;
+  const api = useMemo(() => ({ callApi: (...args) => apiRef.current.callApi(...args) }), []);
   const toast = useToast();
   const { id } = useParams();
   const history = useHistory();
@@ -103,8 +109,23 @@ export const WorkspaceDetail = () => {
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
 
+  // Set when the summary comes back 403/404 (not a member of this workspace): render a
+  // notice and skip every other workspace request instead of surfacing their errors.
+  const [accessDenied, setAccessDenied] = useState(false);
+  // The other loaders wait until the summary for the current route has loaded.
+  const workspaceReady = summary?.id === Number(id);
+
   const loadSummary = useCallback(async () => {
-    const res = await api.callApi("workspaceSummary", { params: { pk: id } });
+    const res = await api.callApi("workspaceSummary", {
+      params: { pk: id },
+      errorFilter: (result) => [403, 404].includes(result?.$meta?.status),
+    });
+    if (res?.error) {
+      setSummary(null);
+      setAccessDenied(true);
+      return;
+    }
+    setAccessDenied(false);
     setSummary(res ?? null);
   }, [api, id]);
 
@@ -134,23 +155,24 @@ export const WorkspaceDetail = () => {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([loadSummary(), loadProjects(), loadDatasets(), loadUsers()]);
+      setAccessDenied(false);
+      await loadSummary();
       setLoading(false);
     })();
     // initial load only
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // reactive reloads when filters change
+  // Load, and reload when filters change, only once the summary has succeeded.
   useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
+    if (workspaceReady) loadProjects();
+  }, [loadProjects, workspaceReady]);
   useEffect(() => {
-    loadDatasets();
-  }, [loadDatasets]);
+    if (workspaceReady) loadDatasets();
+  }, [loadDatasets, workspaceReady]);
   useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
+    if (workspaceReady) loadUsers();
+  }, [loadUsers, workspaceReady]);
 
   const loadOrgMembers = useCallback(async () => {
     // summary doesn't carry org id; fetch the workspace detail to resolve it
@@ -334,8 +356,8 @@ export const WorkspaceDetail = () => {
   // Load the org member pool whenever the Members tab is shown, so the add-member
   // dropdown is populated without needing a separate toggle.
   useEffect(() => {
-    if (activeTab === "users") loadOrgMembers();
-  }, [activeTab, loadOrgMembers]);
+    if (workspaceReady && activeTab === "users") loadOrgMembers();
+  }, [workspaceReady, activeTab, loadOrgMembers]);
 
   useEffect(() => {
     if (activeTab === "users") loadAssignments();
@@ -370,6 +392,19 @@ export const WorkspaceDetail = () => {
     },
     [api, loadAssignments],
   );
+
+  if (accessDenied) {
+    return (
+      <div className={root.toClassName()}>
+        <section className={root.elem("panel").toClassName()}>
+          <p className={root.elem("muted").toClassName()}>이 워크스페이스에 접근할 권한이 없습니다.</p>
+          <Button size="small" look="outlined" onClick={() => history.push("/workspaces")}>
+            워크스페이스 목록으로
+          </Button>
+        </section>
+      </div>
+    );
+  }
 
   if (loading && !summary) {
     return (
