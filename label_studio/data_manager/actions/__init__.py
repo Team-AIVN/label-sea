@@ -32,12 +32,17 @@ class DataManagerAction(TypedDict):
     disabled: Optional[Callable]
     disabled_reason: Optional[str]
     enterprise_badge: Optional[bool]
+    project_permission: Optional[Callable]
 
 
 def check_action_permission(user, action, project):
     """Actions must have permissions, if only one is in the user role then the action is allowed"""
     if 'permission' not in action:
         logger.error('Action must have "permission" field: %s', str(action))
+        return False
+
+    project_permission = action.get('project_permission')
+    if callable(project_permission) and not project_permission(user, project):
         return False
 
     permissions = action['permission']
@@ -62,7 +67,7 @@ def get_all_actions(user, project):
 
     check_permission = load_func(settings.DATA_MANAGER_CHECK_ACTION_PERMISSION)
     actions = [
-        {key: action[key] for key in action if key != 'entry_point'}
+        {key: action[key] for key in action if key not in {'entry_point', 'project_permission'}}
         for action in actions
         if not action.get('hidden', False) and check_permission(user, action, project)
     ]
