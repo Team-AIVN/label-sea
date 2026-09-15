@@ -205,11 +205,22 @@ export const WorkspaceDetail = () => {
       if (res?.id) {
         // Optional: also place the member into a project with a project role.
         if (inviteProjectId) {
-          const pm = await api.callApi("createProjectMember", {
-            params: { pk: Number(inviteProjectId) },
-            body: { user: Number(inviteUser), role: inviteProjectRole },
-            errorFilter: () => true,
-          });
+          const projectPk = Number(inviteProjectId);
+          const userPk = Number(inviteUser);
+          // POST only adds users who are not on the project yet; otherwise change their role.
+          const current = await api.callApi("projectMembers", { params: { pk: projectPk }, errorFilter: () => true });
+          const existing = (current?.$meta?.ok ? listOf(current) : []).find((m) => m.user === userPk);
+          const pm = existing
+            ? await api.callApi("updateProjectMember", {
+                params: { pk: projectPk, memberPk: existing.id },
+                body: { role: inviteProjectRole },
+                errorFilter: () => true,
+              })
+            : await api.callApi("createProjectMember", {
+                params: { pk: projectPk },
+                body: { user: userPk, role: inviteProjectRole },
+                errorFilter: () => true,
+              });
           if (!pm?.$meta?.ok) {
             toast.show({ message: pm?.response?.detail ?? "프로젝트 배정에 실패했습니다.", type: "error" });
           }
@@ -338,10 +349,9 @@ export const WorkspaceDetail = () => {
 
   const changeAssignmentRole = useCallback(
     async (a, role) => {
-      // POST upserts the (user, project) role.
-      const res = await api.callApi("createProjectMember", {
-        params: { pk: a.projectId },
-        body: { user: a.user, role },
+      const res = await api.callApi("updateProjectMember", {
+        params: { pk: a.projectId, memberPk: a.id },
+        body: { role },
         errorFilter: () => true,
       });
       if (!res?.$meta?.ok) {

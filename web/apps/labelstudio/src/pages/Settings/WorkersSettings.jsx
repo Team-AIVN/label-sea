@@ -147,11 +147,19 @@ export const WorkersSettings = () => {
       const uid = Number(uidStr);
       const desiredRole = assignments[uid];
       if (!desiredRole) {
-        ops.push(api.callApi("deleteProjectMember", { params: { pk: projectId, memberPk: srv.memberId } }));
-      } else if (desiredRole !== srv.role) {
-        // POST upserts the (user, project) row's role on the backend.
         ops.push(
-          api.callApi("createProjectMember", { params: { pk: projectId }, body: { user: uid, role: desiredRole } }),
+          api.callApi("deleteProjectMember", {
+            params: { pk: projectId, memberPk: srv.memberId },
+            errorFilter: () => true,
+          }),
+        );
+      } else if (desiredRole !== srv.role) {
+        ops.push(
+          api.callApi("updateProjectMember", {
+            params: { pk: projectId, memberPk: srv.memberId },
+            body: { role: desiredRole },
+            errorFilter: () => true,
+          }),
         );
       }
     }
@@ -159,12 +167,18 @@ export const WorkersSettings = () => {
     for (const [uidStr, role] of Object.entries(assignments)) {
       const uid = Number(uidStr);
       if (!serverByUser[uid]) {
-        ops.push(api.callApi("createProjectMember", { params: { pk: projectId }, body: { user: uid, role } }));
+        ops.push(
+          api.callApi("createProjectMember", {
+            params: { pk: projectId },
+            body: { user: uid, role },
+            errorFilter: () => true,
+          }),
+        );
       }
     }
     const results = await Promise.all(ops);
     setSaving(false);
-    if (results.some((r) => r && r.error)) {
+    if (results.some((r) => !r?.$meta?.ok)) {
       toast.show({ message: "Could not save some changes", type: "error" });
     } else {
       toast.show({ message: "Workers updated" });
