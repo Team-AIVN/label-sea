@@ -279,7 +279,7 @@ class TaskSimpleSerializer(FlexFieldsModelSerializer):
 
     class Meta:
         model = Task
-        exclude = ('precomputed_agreement', 'allow_skip')
+        exclude = ('precomputed_agreement', 'allow_skip', 'assignee', 'assigned_at', 'assigned_by')
 
 
 class BaseTaskSerializer(FlexFieldsModelSerializer):
@@ -339,7 +339,7 @@ class BaseTaskSerializer(FlexFieldsModelSerializer):
 
     class Meta:
         model = Task
-        exclude = ('precomputed_agreement', 'allow_skip')
+        exclude = ('precomputed_agreement', 'allow_skip', 'assignee', 'assigned_at', 'assigned_by')
 
 
 class BaseTaskSerializerBulk(serializers.ListSerializer):
@@ -839,7 +839,7 @@ class TaskWithAnnotationsSerializer(TaskSerializer):
         model = Task
         list_serializer_class = load_func(settings.TASK_SERIALIZER_BULK)
 
-        exclude = ()
+        exclude = ('assignee', 'assigned_at', 'assigned_by')
 
 
 class AnnotationDraftSerializer(ModelSerializer):
