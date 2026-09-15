@@ -293,7 +293,7 @@ class TestTaskAgreementAPI(APITestCase):
 
     @patch('tasks.api.flag_set')
     @patch.object(Project, 'has_permission')
-    def test_distribution_permission_denied_for_other_project(self, mock_has_permission, mock_flag_set):
+    def test_distribution_hides_task_from_other_project(self, mock_has_permission, mock_flag_set):
         mock_flag_set.return_value = True
         other_org = OrganizationFactory()
         other_project = ProjectFactory(organization=other_org)
@@ -306,7 +306,7 @@ class TestTaskAgreementAPI(APITestCase):
         mock_has_permission.side_effect = has_perm
         self.client.force_authenticate(user=self.user)
         response = self.client.get(f'/api/tasks/{task.id}/agreement/')
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     @patch('tasks.api.flag_set')
     def test_distribution_empty_task_returns_zero_annotations(self, mock_flag_set):

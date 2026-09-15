@@ -13,6 +13,13 @@ from users.models import User
 
 @pytest.mark.django_db
 class TestTaskResolveStorageUri:
+    @pytest.fixture(autouse=True)
+    def visible_task_queryset(self, monkeypatch):
+        # Access scoping is covered by task-assignment API tests. Keep these resolver
+        # unit tests focused on URI decoding and storage behavior while still routing
+        # through the view's visible_tasks() lookup.
+        monkeypatch.setattr('io_storages.proxy_api.visible_tasks', lambda user: Task.objects)
+
     @pytest.fixture
     def view(self):
         view = TaskResolveStorageUri.as_view()
@@ -252,6 +259,13 @@ class TestTaskResolveStorageUri:
 
 @pytest.mark.django_db
 class TestProjectResolveStorageUri:
+    @pytest.fixture(autouse=True)
+    def visible_project_queryset(self, monkeypatch):
+        # Assignment-scoped labelers are covered by task-assignment API tests. These
+        # unit tests exercise the resolver itself with unrestricted project access.
+        monkeypatch.setattr('io_storages.proxy_api.visible_projects', lambda user: Project.objects)
+        monkeypatch.setattr('io_storages.proxy_api.is_assignment_scoped', lambda user, project: False)
+
     @pytest.fixture
     def view(self):
         view = ProjectResolveStorageUri.as_view()

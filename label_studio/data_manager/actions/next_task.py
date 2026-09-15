@@ -8,6 +8,7 @@ from data_manager.functions import filters_ordering_selected_items_exist
 from projects.functions.next_task import get_next_task
 from rest_framework.exceptions import NotFound
 from tasks.serializers import NextTaskSerializer
+from users.rules import is_assignment_scoped, project_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,14 @@ def next_task(project, queryset, **kwargs):
 
     request = kwargs['request']
     dm_queue = filters_ordering_selected_items_exist(request.data)
-    next_task, queue_info = get_next_task(request.user, queryset, project, dm_queue)
+    queryset = project_tasks(request.user, project, queryset)
+    next_task, queue_info = get_next_task(
+        request.user,
+        queryset,
+        project,
+        dm_queue,
+        assigned_flag=is_assignment_scoped(request.user, project),
+    )
 
     if next_task is None:
         raise NotFound(f'There are no tasks for {request.user}')

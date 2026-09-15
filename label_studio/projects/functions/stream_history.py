@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import transaction
 from projects.models import LabelStreamHistory
 from tasks.models import Annotation, Task
+from users.rules import project_tasks
 
 TASK_ID_KEY = 'taskId'
 ANNOTATION_ID_KEY = 'annotationId'
@@ -44,7 +45,11 @@ def get_label_stream_history(user, project):
 
         task_ids = set([h[TASK_ID_KEY] for h in history.data])
         annotation_ids = set([h[ANNOTATION_ID_KEY] for h in history.data])
-        existing_task_ids = set(Task.objects.filter(pk__in=task_ids).values_list('id', flat=True))
+        existing_task_ids = set(
+            project_tasks(user, project, Task.objects.filter(project=project, pk__in=task_ids)).values_list(
+                'id', flat=True
+            )
+        )
         existing_annotation_ids = set(Annotation.objects.filter(pk__in=annotation_ids).values_list('id', flat=True))
 
         result = []

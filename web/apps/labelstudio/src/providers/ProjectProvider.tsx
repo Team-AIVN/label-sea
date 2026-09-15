@@ -61,6 +61,10 @@ export const ProjectProvider: React.FunctionComponent = ({ children }) => {
 
       const projectInfo = result as unknown as APIProject;
 
+      // callApi resolves to null when the request fails (e.g. 404 for a project the
+      // user may not see). The global error handler has already reported it.
+      if (!projectInfo) return;
+
       if (shallowEqualObjects(projectData, projectInfo) === false) {
         setProjectData(projectInfo);
         updateStore({ project: projectInfo });

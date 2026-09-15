@@ -19,7 +19,6 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from projects.functions.stream_history import fill_history_annotation
-from projects.models import Project
 from rest_framework import generics, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -41,6 +40,7 @@ from tasks.serializers import (
     TaskSerializer,
     TaskSimpleSerializer,
 )
+from users.rules import visible_projects, visible_tasks
 from webhooks.models import WebhookAction
 from webhooks.utils import (
     api_webhook,
@@ -49,6 +49,14 @@ from webhooks.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _lock_visible_task(request, task_id):
+    """Lock and re-check a task immediately before a write."""
+    # Lock only the task row. Locking the joined project too would queue every write in
+    # the project behind one row and deadlock with requests that lock the project first.
+    queryset = Task.objects.select_for_update(of=('self',)).select_related('project')
+    return generics.get_object_or_404(visible_tasks(request.user, queryset), pk=task_id)
 
 
 # TODO: fix after switch to api/tasks from api/dm/tasks
@@ -192,12 +200,12 @@ class TaskListAPI(DMTaskListAPI):
         context = super().get_serializer_context()
         project_id = self.request.data.get('project')
         if project_id:
-            context['project'] = generics.get_object_or_404(Project, pk=project_id)
+            context['project'] = generics.get_object_or_404(visible_projects(self.request.user), pk=project_id)
         return context
 
     def perform_create(self, serializer):
         project_id = self.request.data.get('project')
-        project = generics.get_object_or_404(Project, pk=project_id)
+        project = generics.get_object_or_404(visible_projects(self.request.user), pk=project_id)
         instance = serializer.save(project=project)
         emit_webhooks_for_instance(
             self.request.user.active_organization, project, WebhookAction.TASKS_CREATED, [instance]
@@ -353,7 +361,7 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         task_id = self.request.parser_context['kwargs'].get('pk')
-        task = generics.get_object_or_404(Task, pk=task_id)
+        task = generics.get_object_or_404(visible_tasks(self.request.user), pk=task_id)
         review = bool_from_request(self.request.GET, 'review', False)
         selected = {'all': False, 'included': [self.kwargs.get('pk')]}
         if review:
@@ -384,7 +392,7 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         # First check permissions using a lightweight query
         # select_related('project') avoids extra query when permission check accesses task.project
         lean_task = generics.get_object_or_404(
-            Task.objects.filter(project__organization=self.request.user.active_organization).select_related('project'),
+            visible_tasks(self.request.user, Task.objects.select_related('project')),
             pk=task_id,
         )
         self.check_object_permissions(self.request, lean_task)
@@ -402,15 +410,21 @@ class TaskAPI(generics.RetrieveUpdateDestroyAPIView):
         else:
             return TaskSimpleSerializer
 
+    @transaction.atomic
     def patch(self, request, *args, **kwargs):
+        self.task = _lock_visible_task(request, self.kwargs.get('pk'))
         return super(TaskAPI, self).patch(request, *args, **kwargs)
 
     @api_webhook_for_delete(WebhookAction.TASKS_DELETED)
+    @transaction.atomic
     def delete(self, request, *args, **kwargs):
+        self.task = _lock_visible_task(request, self.kwargs.get('pk'))
         return super(TaskAPI, self).delete(request, *args, **kwargs)
 
     @extend_schema(exclude=True)
+    @transaction.atomic
     def put(self, request, *args, **kwargs):
+        self.task = _lock_visible_task(request, self.kwargs.get('pk'))
         return super(TaskAPI, self).put(request, *args, **kwargs)
 
 
@@ -456,7 +470,9 @@ class TaskAgreementAPI(generics.RetrieveAPIView):
     """
 
     permission_required = ViewClassPermission(GET=all_permissions.tasks_view)
-    queryset = Task.objects.all()
+
+    def get_queryset(self):
+        return visible_tasks(self.request.user)
 
     def get(self, request, pk):
         # This endpoint is gated by feature flag
@@ -464,7 +480,7 @@ class TaskAgreementAPI(generics.RetrieveAPIView):
             raise PermissionDenied('Feature not enabled')
 
         try:
-            task = Task.objects.get(pk=pk)
+            task = self.get_queryset().get(pk=pk)
         except Task.DoesNotExist:
             return Response({'error': 'Task not found'}, status=404)
 
@@ -642,14 +658,18 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
     )
 
     serializer_class = AnnotationSerializer
-    queryset = Annotation.objects.all()
+
+    def get_queryset(self):
+        return Annotation.objects.filter(task__in=visible_tasks(self.request.user))
 
     def perform_destroy(self, annotation):
         annotation.delete()
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         # save user history with annotator_id, time & annotation result
         annotation = self.get_object()
+        _lock_visible_task(request, annotation.task_id)
         # use updated instead of save to avoid duplicated signals
         Annotation.objects.filter(id=annotation.id).update(updated_by=request.user)
 
@@ -678,7 +698,10 @@ class AnnotationAPI(generics.RetrieveUpdateDestroyAPIView):
         return super(AnnotationAPI, self).patch(request, *args, **kwargs)
 
     @api_webhook_for_delete(WebhookAction.ANNOTATIONS_DELETED)
+    @transaction.atomic
     def delete(self, request, *args, **kwargs):
+        annotation = self.get_object()
+        _lock_visible_task(request, annotation.task_id)
         return super(AnnotationAPI, self).delete(request, *args, **kwargs)
 
 
@@ -757,7 +780,10 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
         GET=all_permissions.annotations_view,
         POST=all_permissions.annotations_create,
     )
-    parent_queryset = Task.objects.all()
+
+    @property
+    def parent_queryset(self):
+        return visible_tasks(self.request.user)
 
     serializer_class = AnnotationSerializer
 
@@ -769,7 +795,7 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
         return super(AnnotationsListAPI, self).post(request, *args, **kwargs)
 
     def get_queryset(self):
-        task = generics.get_object_or_404(Task.objects.for_user(self.request.user), pk=self.kwargs.get('pk', 0))
+        task = generics.get_object_or_404(visible_tasks(self.request.user), pk=self.kwargs.get('pk', 0))
         return Annotation.objects.filter(Q(task=task) & Q(was_cancelled=False)).order_by('pk')
 
     def delete_draft(self, draft_id, annotation_id):
@@ -783,8 +809,9 @@ class AnnotationsListAPI(GetParentObjectMixin, generics.ListCreateAPIView):
         except AnnotationDraft.DoesNotExist:
             pass
 
+    @transaction.atomic
     def perform_create(self, ser):
-        task = self.parent_object
+        task = _lock_visible_task(self.request, self.kwargs['pk'])
         # annotator has write access only to annotations and it can't be checked it after serializer.save()
         user = self.request.user
 
@@ -863,31 +890,53 @@ class AnnotationDraftListAPI(generics.ListCreateAPIView):
         GET=all_permissions.annotations_view,
         POST=all_permissions.annotations_create,
     )
-    queryset = AnnotationDraft.objects.all()
+
+    def get_queryset(self):
+        return AnnotationDraft.objects.filter(task__in=visible_tasks(self.request.user))
 
     def filter_queryset(self, queryset):
         task_id = self.kwargs['pk']
+        generics.get_object_or_404(visible_tasks(self.request.user), pk=task_id)
         return queryset.filter(task_id=task_id)
 
+    @transaction.atomic
     def perform_create(self, serializer):
         task_id = self.kwargs['pk']
         annotation_id = self.kwargs.get('annotation_id')
         user = self.request.user
         logger.debug(f'User {user} is going to create draft for task={task_id}, annotation={annotation_id}')
-        serializer.save(task_id=self.kwargs['pk'], annotation_id=annotation_id, user=self.request.user)
+        task = _lock_visible_task(self.request, task_id)
+        annotation = None
+        if annotation_id is not None:
+            annotation = generics.get_object_or_404(Annotation.objects.filter(task=task), pk=annotation_id)
+        serializer.save(task=task, annotation=annotation, user=self.request.user)
 
 
 @extend_schema(exclude=True)
 class AnnotationDraftAPI(generics.RetrieveUpdateDestroyAPIView):
     parser_classes = (JSONParser, MultiPartParser, FormParser)
     serializer_class = AnnotationDraftSerializer
-    queryset = AnnotationDraft.objects.all()
     permission_required = ViewClassPermission(
         GET=all_permissions.annotations_view,
         PUT=all_permissions.annotations_change,
         PATCH=all_permissions.annotations_change,
         DELETE=all_permissions.annotations_delete,
     )
+
+    def get_queryset(self):
+        return AnnotationDraft.objects.filter(task__in=visible_tasks(self.request.user))
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        draft = self.get_object()
+        _lock_visible_task(request, draft.task_id)
+        return super().update(request, *args, **kwargs)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        draft = self.get_object()
+        _lock_visible_task(request, draft.task_id)
+        return super().destroy(request, *args, **kwargs)
 
 
 @method_decorator(
@@ -1056,7 +1105,13 @@ class PredictionAPI(viewsets.ModelViewSet):
     filterset_fields = ['task', 'task__project', 'project']
 
     def get_queryset(self):
-        return Prediction.objects.filter(project__organization=self.request.user.active_organization)
+        return Prediction.objects.filter(task__in=visible_tasks(self.request.user))
+
+    def perform_create(self, serializer):
+        task = serializer.validated_data.get('task')
+        if task is not None:
+            generics.get_object_or_404(visible_tasks(self.request.user), pk=task.pk)
+        serializer.save()
 
 
 @method_decorator(name='get', decorator=extend_schema(exclude=True))
@@ -1073,13 +1128,17 @@ class PredictionAPI(viewsets.ModelViewSet):
 )
 class AnnotationConvertAPI(generics.RetrieveAPIView):
     permission_required = ViewClassPermission(POST=all_permissions.annotations_change)
-    queryset = Annotation.objects.all()
+
+    def get_queryset(self):
+        return Annotation.objects.filter(task__in=visible_tasks(self.request.user))
 
     def process_intermediate_state(self, annotation, draft):
         pass
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
         annotation = self.get_object()
+        _lock_visible_task(request, annotation.task_id)
         organization = annotation.project.organization
         project = annotation.project
 

@@ -21,7 +21,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
-from users.rules import can_create_workspace
+from users.rules import can_create_workspace, visible_projects
 
 from organizations.models import OrganizationMember
 
@@ -325,8 +325,7 @@ class WorkspaceProjectsAPI(_WorkspaceScopedMixin, generics.ListCreateAPIView):
     }
 
     def get_queryset(self):
-        from projects.models import Project, ProjectMember
-        from users.rules import is_super_admin, is_workspace_manager_of
+        from projects.models import Project
 
         workspace = self._get_workspace()
         # with_counts() is a manager method (adds task_number / finished_task_number
@@ -339,13 +338,7 @@ class WorkspaceProjectsAPI(_WorkspaceScopedMixin, generics.ListCreateAPIView):
             .filter(workspace=workspace, deleted_at__isnull=True)
         )
 
-        # Workers see only projects they belong to; managers (WM/SA) see all.
-        user = self.request.user
-        if not (is_super_admin.test(user) or is_workspace_manager_of.test(user, workspace)):
-            member_ids = ProjectMember.objects.filter(user=user, deleted_at__isnull=True).values_list(
-                'project_id', flat=True
-            )
-            qs = qs.filter(id__in=member_ids)
+        qs = visible_projects(self.request.user, qs)
 
         params = self.request.query_params
         search = params.get('search')

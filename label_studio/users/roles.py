@@ -115,8 +115,10 @@ def has_workspace_access(user):
 def has_project_access(user):
     """True if the user can access at least one project (drives the Projects menu).
 
-    Everyone with a project membership qualifies, plus workspace managers (who
-    manage every project in their workspace). Plain workspace members do not.
+    Users with an enabled annotator, reviewer or project-manager membership qualify,
+    plus workspace managers (who manage every project in their workspace). Plain
+    project members and plain workspace members do not — mirrors
+    ``users.rules.visible_projects``.
     """
     if not user or not user.is_authenticated:
         return False
@@ -127,6 +129,7 @@ def has_project_access(user):
         return False
 
     from projects.models import ProjectMember
+    from users.constants import ProjectRole
     from workspaces.models import WorkspaceMember
 
     if WorkspaceMember.objects.filter(
@@ -137,5 +140,9 @@ def has_project_access(user):
     ).exists():
         return True
     return ProjectMember.objects.filter(
-        user=user, project__organization_id=org_id, deleted_at__isnull=True
+        user=user,
+        project__organization_id=org_id,
+        role__in=(ProjectRole.ANNOTATOR, ProjectRole.REVIEWER, ProjectRole.PROJECT_MANAGER),
+        enabled=True,
+        deleted_at__isnull=True,
     ).exists()

@@ -22,7 +22,7 @@ from core.utils.serializer_to_openapi_params import serializer_to_openapi_params
 from data_manager.functions import filters_ordering_selected_items_exist, get_prepared_queryset
 from django.conf import settings
 from django.db import IntegrityError
-from django.db.models import F, Q
+from django.db.models import F
 from django.http import Http404
 from django.utils.decorators import method_decorator
 from django_filters import CharFilter, FilterSet
@@ -34,7 +34,7 @@ from ml.serializers import MLBackendSerializer
 from projects.functions.next_task import get_next_task
 from projects.functions.stream_history import get_label_stream_history
 from projects.functions.utils import recalculate_created_annotations_and_labels_from_scratch
-from projects.models import Project, ProjectImport, ProjectManager, ProjectMember, ProjectReimport, ProjectSummary
+from projects.models import Project, ProjectImport, ProjectManager, ProjectReimport, ProjectSummary
 from projects.serializers import (
     GetFieldsSerializer,
     ProjectCountsSerializer,
@@ -49,8 +49,14 @@ from projects.serializers import (
 from rest_framework import filters, generics, status
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.exceptions import ValidationError as RestValidationError
-from users.rules import can_create_project, is_super_admin
-from workspaces.models import WorkspaceMember
+from users.rules import (
+    can_create_project,
+    is_assignment_scoped,
+    is_project_manager_of,
+    is_super_admin,
+    project_tasks,
+    visible_projects,
+)
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
@@ -182,22 +188,7 @@ class ProjectListAPI(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         fields = serializer.validated_data.get('include')
         filter = serializer.validated_data.get('filter')
-        projects = Project.objects.filter(organization=self.request.user.active_organization).order_by(
-            F('pinned_at').desc(nulls_last=True), '-created_at'
-        )
-        # Scope the list to projects the user may actually see. Super admins see
-        # every project in the org; everyone else sees only projects they belong to
-        # (as a member of any role) plus projects in workspaces they manage. Without
-        # this, any org member (e.g. a freshly invited user) would see all projects.
-        user = self.request.user
-        if not is_super_admin.test(user):
-            member_project_ids = ProjectMember.objects.filter(user=user, deleted_at__isnull=True).values_list(
-                'project_id', flat=True
-            )
-            managed_workspace_ids = WorkspaceMember.objects.filter(
-                user=user, role='workspace_manager', deleted_at__isnull=True
-            ).values_list('workspace_id', flat=True)
-            projects = projects.filter(Q(id__in=member_project_ids) | Q(workspace_id__in=managed_workspace_ids))
+        projects = visible_projects(self.request.user).order_by(F('pinned_at').desc(nulls_last=True), '-created_at')
         if filter in ['pinned_only', 'exclude_pinned']:
             projects = projects.filter(pinned_at__isnull=filter == 'exclude_pinned')
         projects = ProjectManager.with_counts_annotate(projects, fields=fields)
@@ -272,9 +263,7 @@ class ProjectCountsListAPI(generics.ListAPIView):
         serializer = GetFieldsSerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         fields = serializer.validated_data.get('include')
-        projects = Project.objects.with_counts(fields=fields).filter(
-            organization=self.request.user.active_organization
-        )
+        projects = visible_projects(self.request.user, Project.objects.with_counts(fields=fields))
 
         # Only annotate FSM state for UI/API consumption when both feature flags are enabled
         if flag_set('fflag_feat_fit_568_finite_state_management', user=self.request.user) and flag_set(
@@ -410,9 +399,7 @@ class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
         serializer = GetFieldsSerializer(data=self.request.query_params)
         serializer.is_valid(raise_exception=True)
         fields = serializer.validated_data.get('include')
-        projects = Project.objects.with_counts(fields=fields).filter(
-            organization=self.request.user.active_organization
-        )
+        projects = visible_projects(self.request.user, Project.objects.with_counts(fields=fields))
 
         # Only annotate FSM state for UI/API consumption when both feature flags are enabled
         if flag_set('fflag_feat_fit_568_finite_state_management', user=self.request.user) and flag_set(
@@ -486,14 +473,22 @@ class ProjectAPI(generics.RetrieveUpdateDestroyAPIView):
 class ProjectNextTaskAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.tasks_view
     serializer_class = TaskWithAnnotationsAndPredictionsAndDraftsSerializer
-    queryset = Project.objects.all()
+
+    def get_queryset(self):
+        return visible_projects(self.request.user)
 
     def get(self, request, *args, **kwargs):
         project = self.get_object()
         dm_queue = filters_ordering_selected_items_exist(request.data)
-        prepared_tasks = get_prepared_queryset(request, project)
+        prepared_tasks = project_tasks(request.user, project, get_prepared_queryset(request, project))
 
-        next_task, queue_info = get_next_task(request.user, prepared_tasks, project, dm_queue)
+        next_task, queue_info = get_next_task(
+            request.user,
+            prepared_tasks,
+            project,
+            dm_queue,
+            assigned_flag=is_assignment_scoped(request.user, project),
+        )
 
         if next_task is None:
             raise NotFound(f'There are no tasks for {request.user}')
@@ -510,7 +505,9 @@ class ProjectNextTaskAPI(generics.RetrieveAPIView):
 @extend_schema(exclude=True)
 class LabelStreamHistoryAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.tasks_view
-    queryset = Project.objects.all()
+
+    def get_queryset(self):
+        return visible_projects(self.request.user)
 
     def get(self, request, *args, **kwargs):
         project = self.get_object()
@@ -586,7 +583,9 @@ class ProjectLabelConfigValidateAPI(generics.RetrieveAPIView):
     parser_classes = (JSONParser, FormParser, MultiPartParser)
     serializer_class = ProjectLabelConfigSerializer
     permission_required = all_permissions.projects_change
-    queryset = Project.objects.all()
+
+    def get_queryset(self):
+        return visible_projects(self.request.user)
 
     def post(self, request, *args, **kwargs):
         project = self.get_object()
@@ -608,7 +607,9 @@ class ProjectSummaryAPI(generics.RetrieveAPIView):
     parser_classes = (JSONParser,)
     serializer_class = ProjectSummarySerializer
     permission_required = all_permissions.projects_view
-    queryset = ProjectSummary.objects.all()
+
+    def get_queryset(self):
+        return ProjectSummary.objects.filter(project__in=visible_projects(self.request.user))
 
     @extend_schema(exclude=True)
     def get(self, *args, **kwargs):
@@ -623,10 +624,13 @@ class ProjectSummaryResetAPI(GetParentObjectMixin, generics.CreateAPIView):
     """
 
     parser_classes = (JSONParser,)
-    parent_queryset = Project.objects.all()
     permission_required = ViewClassPermission(
         POST=all_permissions.projects_reset_cache,
     )
+
+    @property
+    def parent_queryset(self):
+        return visible_projects(self.request.user)
 
     @extend_schema(exclude=True)
     def post(self, *args, **kwargs):
@@ -677,8 +681,10 @@ class ProjectImportAPI(generics.RetrieveAPIView):
     permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES + [ProjectImportPermission]
     parser_classes = (JSONParser,)
     serializer_class = ProjectImportSerializer
-    queryset = ProjectImport.objects.all()
     lookup_url_kwarg = 'import_pk'
+
+    def get_queryset(self):
+        return ProjectImport.objects.filter(project__in=visible_projects(self.request.user))
 
 
 @method_decorator(
@@ -715,8 +721,10 @@ class ProjectReimportAPI(generics.RetrieveAPIView):
     permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES + [ProjectImportPermission]
     parser_classes = (JSONParser,)
     serializer_class = ProjectReimportSerializer
-    queryset = ProjectReimport.objects.all()
     lookup_url_kwarg = 'reimport_pk'
+
+    def get_queryset(self):
+        return ProjectReimport.objects.filter(project__in=visible_projects(self.request.user))
 
 
 @method_decorator(
@@ -768,7 +776,6 @@ class ProjectReimportAPI(generics.RetrieveAPIView):
 class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, generics.DestroyAPIView):
     parser_classes = (JSONParser, FormParser)
     queryset = Task.objects.all()
-    parent_queryset = Project.objects.all()
     permission_required = ViewClassPermission(
         GET=all_permissions.tasks_view,
         POST=all_permissions.tasks_change,
@@ -778,6 +785,10 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
     redirect_route = 'projects:project-settings'
     redirect_kwarg = 'pk'
 
+    @property
+    def parent_queryset(self):
+        return visible_projects(self.request.user)
+
     def get_serializer_class(self):
         if self.request.method == 'GET':
             return TaskSimpleSerializer
@@ -785,9 +796,9 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
             return TaskSerializer
 
     def filter_queryset(self, queryset):
-        project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=self.kwargs.get('pk', 0))
+        project = generics.get_object_or_404(visible_projects(self.request.user), pk=self.kwargs.get('pk', 0))
         # ordering is deprecated here
-        tasks = Task.objects.filter(project=project).order_by('-updated_at')
+        tasks = project_tasks(self.request.user, project, Task.objects.filter(project=project)).order_by('-updated_at')
         page = paginator(tasks, self.request)
         if page:
             return page
@@ -795,7 +806,9 @@ class ProjectTaskListAPI(GetParentObjectMixin, generics.ListCreateAPIView, gener
             raise Http404
 
     def delete(self, request, *args, **kwargs):
-        project = generics.get_object_or_404(Project.objects.for_user(self.request.user), pk=self.kwargs['pk'])
+        project = generics.get_object_or_404(visible_projects(self.request.user), pk=self.kwargs['pk'])
+        if not (is_super_admin.test(request.user) or is_project_manager_of.test(request.user, project)):
+            raise PermissionDenied('Only project managers can delete all tasks in a project.')
         task_ids = list(Task.objects.filter(project=project).values('id'))
         Task.delete_tasks_without_signals(Task.objects.filter(project=project))
         logger.info(f'calling reset project_id={project.id} ProjectTaskListAPI.delete()')
@@ -863,9 +876,11 @@ class TemplateListAPI(generics.ListAPIView):
 @extend_schema(exclude=True)
 class ProjectSampleTask(generics.RetrieveAPIView):
     parser_classes = (JSONParser,)
-    queryset = Project.objects.all()
     permission_required = all_permissions.projects_view
     serializer_class = ProjectSerializer
+
+    def get_queryset(self):
+        return visible_projects(self.request.user)
 
     def post(self, request, *args, **kwargs):
         label_config = self.request.data.get('label_config')
@@ -902,7 +917,7 @@ class ProjectModelVersions(generics.RetrieveAPIView):
     permission_required = all_permissions.projects_view
 
     def get_queryset(self):
-        return Project.objects.filter(organization=self.request.user.active_organization)
+        return visible_projects(self.request.user)
 
     def get(self, request, *args, **kwargs):
         project = self.get_object()
@@ -958,7 +973,9 @@ class ProjectModelVersions(generics.RetrieveAPIView):
 )
 class ProjectAnnotatorsAPI(generics.RetrieveAPIView):
     permission_required = all_permissions.projects_view
-    queryset = Project.objects.all()
+
+    def get_queryset(self):
+        return visible_projects(self.request.user)
 
     def get(self, request, *args, **kwargs):
         project = self.get_object()

@@ -8,6 +8,7 @@ from urllib.parse import unquote
 from core.utils.exceptions import extract_message
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect, StreamingHttpResponse
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from projects.models import Project
 from rest_framework import status
@@ -15,6 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from tasks.models import Task
+from users.rules import is_assignment_scoped, visible_projects, visible_tasks
 
 from label_studio.io_storages.functions import get_storage_by_url
 from label_studio.io_storages.utils import parse_range
@@ -301,10 +303,7 @@ class TaskResolveStorageUri(ResolveStorageUriAPIMixin, APIView):
         if fileuri is None or task_id is None:
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            task = Task.objects.get(pk=task_id)
-        except Task.DoesNotExist:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        task = get_object_or_404(visible_tasks(request.user), pk=task_id)
 
         return self.resolve(request, fileuri, task)
 
@@ -329,9 +328,10 @@ class ProjectResolveStorageUri(ResolveStorageUriAPIMixin, APIView):
         if fileuri is None or project_id is None:
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            project = Project.objects.get(pk=project_id)
-        except Project.DoesNotExist:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
+        project = get_object_or_404(visible_projects(request.user), pk=project_id)
+        # Project-scoped resolving can presign any URI attached to the project's
+        # storage. Assignment-scoped labelers must use the task endpoint so their
+        # assignee visibility is checked. Reviewers remain outside assignment scope.
+        if is_assignment_scoped(request.user, project):
+            return Response(status=status.HTTP_403_FORBIDDEN)
         return self.resolve(request, fileuri, project)
