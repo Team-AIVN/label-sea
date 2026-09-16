@@ -49,11 +49,12 @@
     }
 
     &.email {
-      width: 200px;
+      width: 320px;
     }
 
     &.last-activity {
-      width: 160px;
+      width: 170px;
+      white-space: nowrap;
     }
   }
 
