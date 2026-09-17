@@ -1,6 +1,6 @@
 import { formatDistance } from "date-fns";
 import { useCallback, useEffect, useState } from "react";
-import { Userpic } from "@humansignal/ui";
+import { Tooltip, Userpic } from "@humansignal/ui";
 import { Pagination, Spinner } from "../../../components";
 import { usePage, usePageSize } from "../../../components/Pagination/Pagination";
 import { useAPI } from "../../../providers/ApiProvider";
@@ -82,7 +82,11 @@ export const PeopleList = ({ onSelect, selectedUser, defaultSelected }) => {
                           <Userpic user={user} style={{ width: 28, height: 28 }} />
                         </CopyableTooltip>
                       </div>
-                      <div className={cn("people-list").elem("field").mix("email").toClassName()}>{user.email}</div>
+                      <div className={cn("people-list").elem("field").mix("email").toClassName()}>
+                        <Tooltip title={user.email}>
+                          <span className={cn("people-list").elem("ellipsis").toClassName()}>{user.email}</span>
+                        </Tooltip>
+                      </div>
                       <div className={cn("people-list").elem("field").mix("name").toClassName()}>
                         {user.first_name} {user.last_name}
                       </div>
