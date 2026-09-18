@@ -77,6 +77,8 @@ class WorkspaceListAPI(generics.ListCreateAPIView):
         from django.db.models import Count, Q
         from users.rules import is_super_admin
 
+        from users.rules import is_super_admin
+
         org = _active_org_or_400(self.request.user)
         qs = Workspace.objects.filter(organization=org)
         # List only workspaces the user can open: every workspace-scoped endpoint requires

@@ -157,10 +157,12 @@ class ProjectMembersAPI(_ProjectScopedMixin, generics.ListCreateAPIView):
         if existing is None:
             WorkspaceMember.objects.create(user=user, workspace_id=project.workspace_id, role='member')
         elif existing.deleted_at is not None:
+            # WorkspaceMember tracks only `deleted_at` — unlike ProjectMember it has no
+            # `deleted_by` column, so writing one here raised ValueError (HTTP 500) whenever
+            # someone removed from a workspace was assigned to one of its projects again.
             existing.deleted_at = None
-            existing.deleted_by = None
             existing.role = existing.role or 'member'
-            existing.save(update_fields=['deleted_at', 'deleted_by', 'role', 'updated_at'])
+            existing.save(update_fields=['deleted_at', 'role', 'updated_at'])
 
 
 @method_decorator(
