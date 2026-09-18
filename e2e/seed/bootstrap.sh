@@ -51,8 +51,8 @@ for title, description, manager_email in PLAN:
         member.save(update_fields=["role", "deleted_at"])
     # 매니저 외의 멤버는 정리한다. 프로젝트 멤버 배정이 워크스페이스 멤버를 자동으로
     # 추가하기 때문에, 이전 실행이 남긴 멤버십이 "비멤버" 접근 거부 테스트를 무너뜨린다.
-    # (API DELETE 대신 하드 삭제를 쓰는 이유: soft delete 된 멤버를 다시 배정하면
-    #  projects/members_api.py:138 의 deleted_by 저장 때문에 500 이 난다)
+    # 평소 정리는 seed.mjs 가 API 로 하고, 여기서는 soft delete 로 남은 행까지
+    # 하드 삭제해 상태를 완전히 초기화한다.
     removed, _ = WorkspaceMember.objects.filter(workspace=ws).exclude(
         role=WorkspaceMember.Role.WORKSPACE_MANAGER
     ).delete()

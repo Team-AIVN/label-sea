@@ -63,14 +63,20 @@ test.describe('TC-AC 접근 권한', () => {
     }
   });
 
-  test('TC-AC-005 워크스페이스 목록은 조직 전체가 보인다 (현재 동작 기록용)', async () => {
-    // 주의: 목록은 멤버십으로 걸러지지 않는다(workspaces/api.py 의 get_queryset).
-    // 상세·하위 리소스에서 막히므로 데이터 유출은 제목/설명 수준이다.
-    // 이 정책이 바뀌면 이 테스트가 먼저 깨지도록 기대값을 명시해 둔다.
-    const annotator3 = await as('annotator3');
+  test('TC-AC-005 워크스페이스 목록은 소속된 것만 보인다', async () => {
+    // 목록도 상세와 같은 기준으로 걸러진다: 소속되지 않은 워크스페이스는 제목조차 보이면 안 된다.
+    // 조직 전체를 보는 것은 슈퍼 관리자뿐인데, 목 계정에는 슈퍼 관리자가 없다 →
+    // 관리자 쪽 기대값은 백엔드 테스트(workspaces/tests/test_api.py)가 검증한다.
+    const annotator3 = await as('annotator3'); // 워크스페이스 B 소속, A 는 비소속
     const titles = (await annotator3.get('/api/workspaces/')).map((w) => w.title);
-    expect(titles).toContain(WORKSPACES.wsA.title);
     expect(titles).toContain(WORKSPACES.wsB.title);
+    expect(titles).not.toContain(WORKSPACES.wsA.title);
+
+    // 워크스페이스 매니저도 자기 워크스페이스만 본다
+    const wm1 = await as('wm1');
+    const wm1Titles = (await wm1.get('/api/workspaces/')).map((w) => w.title);
+    expect(wm1Titles).toContain(WORKSPACES.wsA.title);
+    expect(wm1Titles).not.toContain(WORKSPACES.wsB.title);
   });
 
   test('TC-AC-006 비멤버는 프로젝트를 수정할 수 없다 (403)', async () => {
@@ -154,33 +160,32 @@ test.describe('TC-AC 접근 권한', () => {
     await wm1.del(`/api/workspaces/${created.id}/`);
   });
 
-  /**
-   * 알려진 버그(제품 결함) 기록.
-   *
-   * 워크스페이스 멤버를 해제(soft delete)한 뒤 같은 사람을 그 워크스페이스의 프로젝트
-   * 멤버로 다시 배정하면 500 이 난다:
-   *   projects/members_api.py:136-138 이 WorkspaceMember 에 없는 `deleted_by` 필드를
-   *   설정하고 update_fields 에 넣어 저장 → ValueError
-   *   (Workspace 모델에는 deleted_by 가 있지만 WorkspaceMember 에는 없다 —
-   *    workspaces/models.py:118-157)
-   *
-   * 고쳐지면 이 테스트가 "예상외 통과"로 뜨면서 알려 준다 (test.fail).
-   */
-  test.fail('TC-AC-014 [알려진 버그] 해제했던 워크스페이스 멤버를 프로젝트에 재배정하면 500', async () => {
+  test('TC-AC-014 워크스페이스에서 해제했던 사람을 프로젝트에 다시 배정할 수 있다', async () => {
+    // 되살리기 경로가 WorkspaceMember 에 없는 `deleted_by` 를 저장하려다 500 이 나던 버그의 회귀 테스트.
     const wm1 = await as('wm1');
     const pm1 = await as('pm1');
     const wsA = workspaceId('wsA');
     const projectUrl = `/api/projects/${projectId('a1')}/members/`;
 
-    // 준비: 대상(작업자3)을 A1 에 넣었다가 워크스페이스 멤버에서 해제한다.
+    // 준비: 대상(작업자3)을 A1 에 넣었다가 워크스페이스 멤버에서까지 해제한다.
     const projectMember = await pm1.post(projectUrl, { user: data.users.annotator3, role: 'annotator' });
     await pm1.del(`${projectUrl}${projectMember.id}/`);
-    const wsMembers = await wm1.get(`/api/workspaces/${wsA}/members/`);
-    const stale = wsMembers.find((m) => m.user === data.users.annotator3);
+    const stale = (await wm1.get(`/api/workspaces/${wsA}/members/`)).find(
+      (m) => m.user === data.users.annotator3,
+    );
     if (stale) await wm1.del(`/api/workspaces/${wsA}/members/${stale.id}/`);
 
-    // 재배정 → 기대: 201, 실제: 500
-    const res = await pm1.raw('POST', projectUrl, { json: { user: data.users.annotator3, role: 'annotator' } });
-    expect(res.status).toBe(201);
+    // 재배정 → 201, 워크스페이스 멤버십도 함께 되살아난다
+    const again = await pm1.raw('POST', projectUrl, { json: { user: data.users.annotator3, role: 'annotator' } });
+    expect(again.status).toBe(201);
+    const revived = await wm1.get(`/api/workspaces/${wsA}/members/`);
+    expect(revived.map((m) => m.user)).toContain(data.users.annotator3);
+
+    // 뒷정리: 다른 테스트가 기대하는 "작업자3 = 워크스페이스 A 비멤버" 상태로 되돌린다.
+    await pm1.del(`${projectUrl}${again.data.id}/`);
+    const toRemove = (await wm1.get(`/api/workspaces/${wsA}/members/`)).find(
+      (m) => m.user === data.users.annotator3,
+    );
+    if (toRemove) await wm1.del(`/api/workspaces/${wsA}/members/${toRemove.id}/`);
   });
 });
