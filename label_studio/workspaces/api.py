@@ -76,13 +76,29 @@ class WorkspaceListAPI(generics.ListCreateAPIView):
     def get_queryset(self):
         from django.db.models import Count, Q
 
+        from users.rules import is_super_admin
+
         org = _active_org_or_400(self.request.user)
+        qs = Workspace.objects.filter(organization=org)
+
+        # Membership scoping, same rule as the detail endpoint: a workspace a user doesn't
+        # belong to must not show up at all — not even its title. Only super admins get the
+        # whole organization, since they are the ones who administer it.
+        #
+        # Filtered with a subquery rather than a join on `members`, so the project count
+        # annotation below isn't multiplied by the number of membership rows.
+        if not is_super_admin.test(self.request.user):
+            qs = qs.filter(
+                id__in=WorkspaceMember.objects.filter(
+                    user=self.request.user,
+                    deleted_at__isnull=True,
+                ).values('workspace_id')
+            )
+
         # Annotate the active project count so the serializer doesn't COUNT per row.
-        return (
-            Workspace.objects.filter(organization=org)
-            .annotate(active_project_count=Count('projects', filter=Q(projects__deleted_at__isnull=True)))
-            .order_by('-created_at')
-        )
+        return qs.annotate(
+            active_project_count=Count('projects', filter=Q(projects__deleted_at__isnull=True))
+        ).order_by('-created_at')
 
     @transaction.atomic
     def perform_create(self, serializer):
