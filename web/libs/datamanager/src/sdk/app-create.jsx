@@ -30,12 +30,17 @@ const createDynamicModels = (columns) => {
  * Create DM React app
  * @param {HTMLElement} rootNode
  * @param {import("./dm-sdk").DataManager} datamanager
- * @returns {Promise<AppStore>}
+ * @param {() => boolean} [isCancelled] whether the owning SDK was destroyed meanwhile
+ * @returns {Promise<AppStore | null>}
  */
-export const createApp = async (rootNode, datamanager) => {
+export const createApp = async (rootNode, datamanager, isCancelled = () => false) => {
   const isLabelStream = datamanager.mode === "labelstream";
 
   const response = await datamanager.api.columns();
+
+  // The SDK may have been destroyed while columns were loading (e.g. the user
+  // switched projects). Bail before touching the root, the globals or the API.
+  if (isCancelled()) return null;
 
   if (!response || response.error) {
     const message = `

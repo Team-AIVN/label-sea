@@ -121,6 +121,13 @@ export class DataManager {
   /** @type {boolean} */
   started = false;
 
+  /**
+   * Bumped by every initApp() and destroy(), so an initApp() still waiting on the
+   * network can tell it has been superseded.
+   * @type {number}
+   */
+  initGeneration = 0;
+
   instruments = new Map();
 
   /**
@@ -406,7 +413,13 @@ export class DataManager {
 
   /** @private */
   async initApp() {
-    this.store = await createApp(this.root, this);
+    const generation = ++this.initGeneration;
+    const store = await createApp(this.root, this, () => generation !== this.initGeneration);
+
+    // destroy() (or a newer initApp) ran while columns were loading - stay out of the way.
+    if (!store) return;
+
+    this.store = store;
     this.invoke("ready", [this]);
   }
 
@@ -457,6 +470,10 @@ export class DataManager {
   }
 
   destroy(detachCallbacks = true) {
+    // Invalidate an initApp() that is still waiting on the network, so it doesn't
+    // render into our root (and fetch/navigate for its project) after teardown.
+    this.initGeneration++;
+
     this.destroyLSF();
     unmountComponentAtNode(this.root);
 
