@@ -1,0 +1,19 @@
+{
+  "name": "labelsea-e2e",
+  "private": true,
+  "type": "module",
+  "description": "LabelSea 워크스페이스/프로젝트/작업·검수 E2E 테스트",
+  "scripts": {
+    "seed:accounts": "bash seed/signup.sh",
+    "seed:bootstrap": "bash seed/bootstrap.sh",
+    "seed": "node seed/seed.mjs",
+    "test": "playwright test",
+    "test:api": "playwright test tests/api",
+    "test:ui": "playwright test tests/ui",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
