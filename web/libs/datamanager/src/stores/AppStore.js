@@ -776,6 +776,9 @@ export const AppStore = types
 
       if (result.async) {
         self.SDK.invoke("toast", { message: "Your action is being processed in the background.", type: "info" });
+      } else if (!result.error && result.detail) {
+        // Surface the server's outcome (e.g. how many tasks were assigned); failures already show an error.
+        self.SDK.invoke("toast", { message: result.detail, type: "info" });
       }
 
       if (result.reload) {

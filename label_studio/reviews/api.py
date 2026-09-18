@@ -5,7 +5,6 @@ import logging
 from core.permissions import ViewClassPermission, all_permissions
 from django.utils.decorators import method_decorator
 from drf_spectacular.utils import extend_schema
-from projects.models import Project
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -16,6 +15,8 @@ from users.rules import (
     is_reviewer_of,
     is_super_admin,
     is_workspace_manager_of,
+    project_tasks,
+    visible_projects,
 )
 
 from . import services
@@ -34,7 +35,7 @@ def _project_in_active_org_or_404(request, project_pk):
     org = getattr(request.user, 'active_organization', None)
     if org is None:
         raise ValidationError('User has no active organization.')
-    return generics.get_object_or_404(Project.objects.filter(organization=org), pk=project_pk)
+    return generics.get_object_or_404(visible_projects(request.user), pk=project_pk)
 
 
 def _require_reviewer(user, project):
@@ -58,10 +59,9 @@ def _review_task_queryset(user, project, task_id=None):
     (so they can review the decisions/reasons on their own work).
 
     Exception: a single task addressed by ``?task=<id>`` — the activity-log deep link from
-    the Data Manager's status column — is visible to any project member. They can already
-    open that task and see every annotation and its author in the editor's "view all" tab,
-    so the timeline exposes nothing new, and without this the link dead-ends on an empty
-    table for a labeler who did not annotate that particular task.
+    the Data Manager's status column — is visible to any project member who can open that
+    task. For a labeler that means a task assigned to them (``project_tasks`` applies the
+    assignment scope), even before they annotate it; tasks assigned to others stay hidden.
     """
     base = (
         Task.objects.filter(project=project)
@@ -70,6 +70,7 @@ def _review_task_queryset(user, project, task_id=None):
         # query (avoids N+1 across the task list).
         .prefetch_related('annotations__completed_by', 'annotations__reviews__reviewer')
     )
+    base = project_tasks(user, project, base)
     if _is_review_manager(user, project):
         return base
     if task_id and is_project_member_of.test(user, project):
@@ -152,7 +153,7 @@ class ReviewProgressAPI(generics.GenericAPIView):
             or Task.objects.filter(project=project, annotations__completed_by=request.user).exists()
         ):
             raise PermissionDenied('You do not have access to this project.')
-        base = Task.objects.filter(project=project)
+        base = project_tasks(request.user, project, Task.objects.filter(project=project))
         selected = base.exclude(review_status=Task.ReviewStatus.NOT_SELECTED).count()
         completed = base.filter(
             review_status__in=[

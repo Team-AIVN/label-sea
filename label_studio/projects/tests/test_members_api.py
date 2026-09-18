@@ -1,88 +1,67 @@
-"""Tests for the project membership API, focused on the workspace side effect.
-
-Assigning someone to a project also makes them a member of the project's workspace, so a
-manager can staff a project from its Workers tab without a separate workspace invite.
-"""
-
+from audit.models import AuditAction, AuditLog
 from organizations.models import OrganizationMember
 from organizations.tests.factories import OrganizationFactory
+from projects.models import ProjectMember
 from projects.tests.factories import ProjectFactory
 from rest_framework.test import APITestCase
+from users.constants import ProjectRole
 from users.tests.factories import UserFactory
-from workspaces.models import Workspace, WorkspaceMember
 
 
-def _join_org(user, org):
-    user.active_organization = org
+def _join(user, organization):
+    user.active_organization = organization
     user.save(update_fields=['active_organization'])
-    OrganizationMember.objects.get_or_create(user=user, organization=org)
+    OrganizationMember.objects.get_or_create(user=user, organization=organization)
 
 
-class ProjectMemberWorkspaceMembershipTests(APITestCase):
+class ProjectMembersAPITests(APITestCase):
     def setUp(self):
-        self.org = OrganizationFactory()
-        self.owner = self.org.created_by  # org creator == super admin
-        _join_org(self.owner, self.org)
-
-        self.workspace = Workspace.objects.create(organization=self.org, title='WS', created_by=self.owner)
-        self.project = ProjectFactory(organization=self.org, workspace=self.workspace, created_by=self.owner)
-
+        self.organization = OrganizationFactory()
+        self.owner = self.organization.created_by
+        _join(self.owner, self.organization)
+        self.project = ProjectFactory(organization=self.organization, created_by=self.owner)
         self.worker = UserFactory()
-        _join_org(self.worker, self.org)
+        _join(self.worker, self.organization)
+        self.client.force_authenticate(self.owner)
+        self.url = f'/api/projects/{self.project.id}/members/'
 
-        self.client.force_authenticate(user=self.owner)
+    def _assign(self, role):
+        return self.client.post(self.url, {'user': self.worker.id, 'role': role}, format='json')
 
-    def _url(self, member_pk=None):
-        base = f'/api/projects/{self.project.id}/members/'
-        return base if member_pk is None else f'{base}{member_pk}/'
-
-    def _add_worker(self, role='annotator'):
-        return self.client.post(self._url(), {'user': self.worker.id, 'role': role}, format='json')
-
-    def test_adding_project_member_creates_workspace_membership(self):
-        response = self._add_worker()
-
-        assert response.status_code == 201, response.content
-        membership = WorkspaceMember.objects.get(workspace=self.workspace, user=self.worker)
-        assert membership.role == WorkspaceMember.Role.MEMBER
-        assert membership.deleted_at is None
-
-    def test_reassign_after_workspace_membership_was_removed(self):
-        """Removing someone from the workspace must not block assigning them again.
-
-        The revive path used to also write `deleted_by`, a column WorkspaceMember doesn't
-        have (ProjectMember does) — Django raised ValueError and the request 500'd.
-        """
-        first = self._add_worker()
+    def test_assigning_an_existing_member_again_is_rejected(self):
+        first = self._assign(ProjectRole.ANNOTATOR)
         assert first.status_code == 201, first.content
-        self.client.delete(self._url(first.json()['id']))
 
-        # Manager removes them from the workspace as well (soft delete).
-        membership = WorkspaceMember.objects.get(workspace=self.workspace, user=self.worker)
-        removed = self.client.delete(f'/api/workspaces/{self.workspace.id}/members/{membership.id}/')
-        assert removed.status_code == 204, removed.content
+        again = self._assign(ProjectRole.REVIEWER)
+        assert again.status_code == 400, again.content
 
-        again = self._add_worker(role='reviewer')
+        member = ProjectMember.objects.get(project=self.project, user=self.worker, deleted_at__isnull=True)
+        assert member.role == ProjectRole.ANNOTATOR
+        assert AuditLog.objects.filter(action=AuditAction.ROLE_GRANTED, target_id=member.id).count() == 1
 
+    def test_role_change_goes_through_patch_and_is_audited_as_a_change(self):
+        member_id = self._assign(ProjectRole.ANNOTATOR).json()['id']
+
+        response = self.client.patch(f'{self.url}{member_id}/', {'role': ProjectRole.REVIEWER}, format='json')
+        assert response.status_code == 200, response.content
+        assert ProjectMember.objects.get(pk=member_id).role == ProjectRole.REVIEWER
+        assert AuditLog.objects.latest('id').action == AuditAction.ROLE_CHANGED
+
+    def test_patch_cannot_move_a_membership_to_another_user(self):
+        member_id = self._assign(ProjectRole.ANNOTATOR).json()['id']
+        other = UserFactory()
+        _join(other, self.organization)
+
+        response = self.client.patch(f'{self.url}{member_id}/', {'user': other.id}, format='json')
+        assert response.status_code == 400, response.content
+        assert ProjectMember.objects.get(pk=member_id).user_id == self.worker.id
+
+    def test_removed_member_can_be_assigned_again(self):
+        member_id = self._assign(ProjectRole.ANNOTATOR).json()['id']
+        assert self.client.delete(f'{self.url}{member_id}/').status_code == 204
+
+        again = self._assign(ProjectRole.REVIEWER)
         assert again.status_code == 201, again.content
-        membership.refresh_from_db()
-        assert membership.deleted_at is None, 'workspace membership should be revived'
-        assert (
-            WorkspaceMember.objects.filter(workspace=self.workspace, user=self.worker).count() == 1
-        ), 'revive must reuse the existing row, not create a duplicate'
-
-    def test_revived_membership_keeps_its_previous_role(self):
-        """A workspace manager who is re-added to a project stays a manager."""
-        membership = WorkspaceMember.objects.create(
-            workspace=self.workspace,
-            user=self.worker,
-            role=WorkspaceMember.Role.WORKSPACE_MANAGER,
-        )
-        removed = self.client.delete(f'/api/workspaces/{self.workspace.id}/members/{membership.id}/')
-        assert removed.status_code == 204, removed.content
-
-        assert self._add_worker().status_code == 201
-
-        membership.refresh_from_db()
-        assert membership.deleted_at is None
-        assert membership.role == WorkspaceMember.Role.WORKSPACE_MANAGER
+        assert again.json()['id'] == member_id
+        active = ProjectMember.objects.filter(project=self.project, user=self.worker, deleted_at__isnull=True)
+        assert list(active.values_list('role', flat=True)) == [ProjectRole.REVIEWER]

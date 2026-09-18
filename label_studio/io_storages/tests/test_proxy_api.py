@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from django.db.models import QuerySet
 from io_storages.proxy_api import (
     ProjectResolveStorageUri,
     ResolveStorageUriAPIMixin,
@@ -521,10 +522,13 @@ class TestTaskResolveStorageUri:
         response = self.view(request)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    @patch('io_storages.proxy_api.Task.objects.get')
-    def test_get_task_not_found(self, mock_task_get, setup):
+    @patch('io_storages.proxy_api.visible_tasks')
+    def test_get_task_not_found(self, mock_visible_tasks, setup):
         # Mock the database query to raise DoesNotExist
-        mock_task_get.side_effect = Task.DoesNotExist
+        queryset = MagicMock(spec=QuerySet)
+        queryset.model = Task
+        queryset.get.side_effect = Task.DoesNotExist
+        mock_visible_tasks.return_value = queryset
 
         request = self.factory.get('/task/999/resolve/?fileuri=test')
         force_authenticate(request, user=self.user)
@@ -532,18 +536,21 @@ class TestTaskResolveStorageUri:
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    @patch('io_storages.proxy_api.Task.objects.get')
+    @patch('io_storages.proxy_api.visible_tasks')
     @patch.object(ResolveStorageUriAPIMixin, 'resolve')
-    def test_get_success(self, mock_resolve, mock_task_get, setup):
+    def test_get_success(self, mock_resolve, mock_visible_tasks, setup):
         # Mock the database query and resolve method
-        mock_task_get.return_value = self.task
+        queryset = MagicMock(spec=QuerySet)
+        queryset.model = Task
+        queryset.get.return_value = self.task
+        mock_visible_tasks.return_value = queryset
         mock_resolve.return_value = Response(status=status.HTTP_200_OK)
 
         request = self.factory.get('/task/1/resolve/?fileuri=test')
         force_authenticate(request, user=self.user)
         response = self.view(request, task_id=1)
 
-        mock_task_get.assert_called_once_with(pk=1)
+        queryset.get.assert_called_once_with(pk=1)
         # Use any_call instead of assert_called_once_with to handle DRF request vs WSGIRequest
         assert mock_resolve.call_args is not None
         assert mock_resolve.call_args[0][1] == 'test'
@@ -578,10 +585,13 @@ class TestProjectResolveStorageUri:
         response = self.view(request)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    @patch('io_storages.proxy_api.Project.objects.get')
-    def test_get_project_not_found(self, mock_project_get, setup):
+    @patch('io_storages.proxy_api.visible_projects')
+    def test_get_project_not_found(self, mock_visible_projects, setup):
         # Mock the database query to raise DoesNotExist
-        mock_project_get.side_effect = Project.DoesNotExist
+        queryset = MagicMock(spec=QuerySet)
+        queryset.model = Project
+        queryset.get.side_effect = Project.DoesNotExist
+        mock_visible_projects.return_value = queryset
 
         request = self.factory.get('/project/999/resolve/?fileuri=test')
         force_authenticate(request, user=self.user)
@@ -589,18 +599,21 @@ class TestProjectResolveStorageUri:
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    @patch('io_storages.proxy_api.Project.objects.get')
+    @patch('io_storages.proxy_api.visible_projects')
     @patch.object(ResolveStorageUriAPIMixin, 'resolve')
-    def test_get_success(self, mock_resolve, mock_project_get, setup):
+    def test_get_success(self, mock_resolve, mock_visible_projects, setup):
         # Mock the database query and resolve method
-        mock_project_get.return_value = self.project
+        queryset = MagicMock(spec=QuerySet)
+        queryset.model = Project
+        queryset.get.return_value = self.project
+        mock_visible_projects.return_value = queryset
         mock_resolve.return_value = Response(status=status.HTTP_200_OK)
 
         request = self.factory.get('/project/1/resolve/?fileuri=test')
         force_authenticate(request, user=self.user)
         response = self.view(request, project_id=1)
 
-        mock_project_get.assert_called_once_with(pk=1)
+        queryset.get.assert_called_once_with(pk=1)
         # Use any_call instead of assert_called_once_with to handle DRF request vs WSGIRequest
         assert mock_resolve.call_args is not None
         assert mock_resolve.call_args[0][1] == 'test'

@@ -25,7 +25,6 @@ from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
-from projects.models import Project
 from projects.serializers import ProjectSerializer
 from rest_framework import generics, viewsets
 from rest_framework.decorators import action
@@ -33,6 +32,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from tasks.models import Annotation, Prediction, Task
+from users.rules import project_tasks, visible_projects
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,10 @@ class ViewAPI(viewsets.ModelViewSet):
     )
 
     def perform_create(self, serializer):
+        project = generics.get_object_or_404(
+            visible_projects(self.request.user), pk=serializer.validated_data['project'].pk
+        )
+        serializer.validated_data['project'] = project
         serializer.save(user=self.request.user)
 
     @extend_schema(
@@ -191,7 +195,7 @@ class ViewAPI(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
         project = generics.get_object_or_404(
-            Project.objects.for_user(request.user), pk=serializer.validated_data['project'].id
+            visible_projects(request.user), pk=serializer.validated_data['project'].id
         )
         queryset = self.filter_queryset(self.get_queryset()).filter(project=project)
         queryset.all().delete()
@@ -217,7 +221,7 @@ class ViewAPI(viewsets.ModelViewSet):
         project_id = serializer.validated_data['project']
         view_ids = serializer.validated_data['ids']
 
-        project = generics.get_object_or_404(Project.objects.for_user(request.user), pk=project_id)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=project_id)
 
         queryset = self.filter_queryset(self.get_queryset()).filter(project=project)
         views = list(queryset.filter(id__in=view_ids))
@@ -234,7 +238,7 @@ class ViewAPI(viewsets.ModelViewSet):
         return Response(status=200)
 
     def get_queryset(self):
-        return View.objects.filter(project__organization=self.request.user.active_organization).order_by('order', 'id')
+        return View.objects.filter(project__in=visible_projects(self.request.user)).order_by('order', 'id')
 
 
 class TaskPagination(PageNumberPagination):
@@ -340,7 +344,9 @@ class TaskListAPI(generics.ListCreateAPIView):
         }
 
     def get_task_queryset(self, request, prepare_params):
-        return Task.prepared.only_filtered(prepare_params=prepare_params)
+        queryset = Task.prepared.only_filtered(prepare_params=prepare_params)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=prepare_params.project)
+        return project_tasks(request.user, project, queryset)
 
     @staticmethod
     def prefetch(queryset):
@@ -364,10 +370,12 @@ class TaskListAPI(generics.ListCreateAPIView):
         view_pk = int_from_request(request.GET, 'view', 0) or int_from_request(request.data, 'view', 0)
         project_pk = int_from_request(request.GET, 'project', 0) or int_from_request(request.data, 'project', 0)
         if project_pk:
-            project = generics.get_object_or_404(Project, pk=project_pk)
+            project = generics.get_object_or_404(visible_projects(request.user), pk=project_pk)
             self.check_object_permissions(request, project)
         elif view_pk:
-            view = generics.get_object_or_404(View, pk=view_pk)
+            view = generics.get_object_or_404(
+                View.objects.filter(project__in=visible_projects(request.user)), pk=view_pk
+            )
             project = view.project
             self.check_object_permissions(request, project)
         else:
@@ -490,7 +498,7 @@ class ProjectColumnsAPI(APIView):
 
     def get(self, request):
         pk = int_from_request(request.GET, 'project', 1)
-        project = generics.get_object_or_404(Project, pk=pk)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=pk)
         self.check_object_permissions(request, project)
         GET_ALL_COLUMNS = load_func(settings.DATA_MANAGER_GET_ALL_COLUMNS)
         data = GET_ALL_COLUMNS(project, request.user)
@@ -513,7 +521,7 @@ class ProjectStateAPI(APIView):
 
     def get(self, request):
         pk = int_from_request(request.GET, 'project', 1)  # replace 1 to None, it's for debug only
-        project = generics.get_object_or_404(Project, pk=pk)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=pk)
         self.check_object_permissions(request, project)
         data = ProjectSerializer(project).data
 
@@ -531,8 +539,10 @@ class ProjectStateAPI(APIView):
                 'can_manage_tasks': True,
                 'source_syncing': False,
                 'target_syncing': False,
-                'task_count': project.tasks.count(),
-                'annotation_count': Annotation.objects.filter(project=project).count(),
+                'task_count': project_tasks(request.user, project, project.tasks.all()).count(),
+                'annotation_count': Annotation.objects.filter(
+                    task__in=project_tasks(request.user, project, project.tasks.all())
+                ).count(),
                 'config_has_control_tags': len(project.get_parsed_config()) > 0,
                 # The requesting user's project-scoped role (annotator/reviewer/...), so the
                 # Data Manager can switch the labeling UI into reviewer mode.
@@ -695,13 +705,13 @@ class ProjectActionsAPI(APIView):
 
     def get(self, request):
         pk = int_from_request(request.GET, 'project', 0)
-        project = generics.get_object_or_404(Project, pk=pk)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=pk)
         self.check_object_permissions(request, project)
         return Response(get_all_actions(request.user, project))
 
     def post(self, request):
         pk = int_from_request(request.GET, 'project', 0)
-        project = generics.get_object_or_404(Project, pk=pk)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=pk)
         self.check_object_permissions(request, project)
 
         # keep ordering only when needed, otherwise drop to avoid expensive sorts/annotations
@@ -715,6 +725,7 @@ class ProjectActionsAPI(APIView):
             prepare_params.ordering = []
             queryset = Task.prepared.only_filtered(prepare_params=prepare_params)
             queryset = queryset.order_by()
+        queryset = project_tasks(request.user, project, queryset)
 
         # wrong action id
         if action_id is None:
@@ -765,7 +776,7 @@ class ProjectActionsFormAPI(APIView):
 
     def get(self, request, action_id):
         pk = int_from_request(request.GET, 'project', 0)
-        project = generics.get_object_or_404(Project, pk=pk)
+        project = generics.get_object_or_404(visible_projects(request.user), pk=pk)
         self.check_object_permissions(request, project)
 
         form = get_action_form(action_id, project, request.user)

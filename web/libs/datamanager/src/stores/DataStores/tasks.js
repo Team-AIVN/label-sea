@@ -27,6 +27,8 @@ export const create = (columns) => {
     reviewers: types.optional(types.array(Assignee), []),
     // Latest reviewer of the task (single user, rendered with the user-list cell).
     reviewed_by: types.optional(types.array(Assignee), []),
+    // Labeler the task is assigned to (single user, rendered with the user-list cell).
+    labeler: types.optional(types.array(Assignee), []),
     // Raw review version records for the task (rendered as links by the Reviews cell).
     reviews: types.frozen([]),
     // Current review status of the task (source of truth for the Reviews cell badge).

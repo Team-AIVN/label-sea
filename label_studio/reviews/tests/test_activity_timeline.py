@@ -144,8 +144,8 @@ class ActivityTimelineTests(APITestCase):
         assert '주간 → 석간' in entries[1]['comment']
         assert entries[2]['reviewer']['id'] == self.reviewer.id  # 검수자1 승인
 
-    def test_labeler_can_open_activity_of_a_teammates_task(self):
-        """The status column's activity link must work for a task you did not annotate."""
+    def test_labeler_cannot_open_activity_of_a_task_assigned_to_someone_else(self):
+        """Labelers only reach tasks assigned to them, deep link included."""
         Annotation.objects.create(
             task=self.task,
             project=self.project,
@@ -153,7 +153,26 @@ class ActivityTimelineTests(APITestCase):
             result=_result('주간'),
             status=Annotation.Status.COMPLETED,
         )
-        # 라벨러2 is a project member but has annotated nothing here.
+        Task.objects.filter(pk=self.task.pk).update(assignee=self.labeler1)
+        self.client.force_authenticate(self.labeler2)
+
+        tasks = self.client.get(f'/api/projects/{self.project.pk}/review/tasks?task={self.task.pk}')
+        assert tasks.status_code == 200
+        rows = tasks.json()
+        rows = rows.get('results', rows) if isinstance(rows, dict) else rows
+        assert rows == []
+
+    def test_labeler_can_open_activity_of_a_task_assigned_to_them(self):
+        """The status column's activity link must work for your task before you annotate it."""
+        Annotation.objects.create(
+            task=self.task,
+            project=self.project,
+            completed_by=self.labeler1,
+            result=_result('주간'),
+            status=Annotation.Status.COMPLETED,
+        )
+        # The task was reassigned to 라벨러2, who has annotated nothing here yet.
+        Task.objects.filter(pk=self.task.pk).update(assignee=self.labeler2)
         self.client.force_authenticate(self.labeler2)
 
         progress = self.client.get(f'/api/projects/{self.project.pk}/review/progress')
@@ -190,11 +209,9 @@ class ActivityTimelineTests(APITestCase):
         )
         self.client.force_authenticate(outsider)
 
-        assert self.client.get(f'/api/projects/{self.project.pk}/review/progress').status_code == 403
+        assert self.client.get(f'/api/projects/{self.project.pk}/review/progress').status_code == 404
         tasks = self.client.get(f'/api/projects/{self.project.pk}/review/tasks?task={self.task.pk}')
-        rows = tasks.json()
-        rows = rows.get('results', rows) if isinstance(rows, dict) else rows
-        assert rows == []
+        assert tasks.status_code == 404
 
     def test_labeler_edit_does_not_fill_reviewed_by_columns(self):
         """A labeler's edit is an activity entry, not a review — the DM's 검수자/검수됨 stay empty."""

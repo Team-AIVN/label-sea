@@ -56,6 +56,12 @@ class TestTaskAPI(APITestCase):
             'comment_count': 0,
             'last_comment_updated_at': None,
             'unresolved_comment_count': 0,
+            'current_annotation': None,
+            'review_status': 'NOT_SELECTED',
+            'reviewed_at': None,
+            'reviewed_by': [],
+            'labeler': [],
+            'reviews': [],
         }
 
     def test_patch_task(self):
@@ -98,6 +104,8 @@ class TestTaskAPI(APITestCase):
             'comment_count': 0,
             'last_comment_updated_at': None,
             'unresolved_comment_count': 0,
+            'current_annotation': None,
+            'review_status': 'NOT_SELECTED',
         }
 
     def test_create_task_without_project_id_fails(self):
@@ -285,7 +293,7 @@ class TestTaskAgreementAPI(APITestCase):
 
     @patch('tasks.api.flag_set')
     @patch.object(Project, 'has_permission')
-    def test_distribution_permission_denied_for_other_project(self, mock_has_permission, mock_flag_set):
+    def test_distribution_hides_task_from_other_project(self, mock_has_permission, mock_flag_set):
         mock_flag_set.return_value = True
         other_org = OrganizationFactory()
         other_project = ProjectFactory(organization=other_org)
@@ -298,7 +306,7 @@ class TestTaskAgreementAPI(APITestCase):
         mock_has_permission.side_effect = has_perm
         self.client.force_authenticate(user=self.user)
         response = self.client.get(f'/api/tasks/{task.id}/agreement/')
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     @patch('tasks.api.flag_set')
     def test_distribution_empty_task_returns_zero_annotations(self, mock_flag_set):

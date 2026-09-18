@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import rules
 
+from django.db.models import Q
+
 from users.constants import WORKER_ROLES, OrganizationRole, ProjectRole
 
 
@@ -141,6 +143,95 @@ def is_project_member_of(user, obj):
     if project is None:
         return False
     return project.members.filter(user=user, deleted_at__isnull=True).exists()
+
+
+def visible_projects(user, queryset=None):
+    """Return projects visible to ``user`` inside their active organization.
+
+    Super admins see the whole organization. Other users see projects where they
+    have an enabled labeling, reviewing or project-manager role, plus every
+    project in a workspace they manage. The unassigned member role is excluded.
+    Individual task assignee values do not affect visibility.
+    """
+    from projects.models import Project, ProjectMember
+
+    if queryset is None:
+        queryset = Project.objects.all()
+    if not user or not user.is_authenticated or not getattr(user, 'active_organization_id', None):
+        return queryset.none()
+
+    queryset = queryset.filter(organization_id=user.active_organization_id)
+    if is_super_admin.test(user):
+        return queryset
+
+    member_project_ids = ProjectMember.objects.filter(
+        user=user,
+        role__in=(ProjectRole.ANNOTATOR, ProjectRole.REVIEWER, ProjectRole.PROJECT_MANAGER),
+        enabled=True,
+        deleted_at__isnull=True,
+    ).values_list('project_id', flat=True)
+    return queryset.filter(
+        Q(id__in=member_project_ids) | Q(workspace_id__in=_managed_workspace_ids(user))
+    ).distinct()
+
+
+def _managed_workspace_ids(user):
+    from workspaces.models import WorkspaceMember
+
+    return WorkspaceMember.objects.filter(
+        user=user,
+        workspace__organization_id=user.active_organization_id,
+        role='workspace_manager',
+        deleted_at__isnull=True,
+    ).values_list('workspace_id', flat=True)
+
+
+def assignment_scoped_project_ids(user):
+    """Projects where ``user`` may work only on the tasks assigned to them.
+
+    Those are the projects where their role is annotator, unless they also manage the
+    project's workspace. Reviewers, project managers, workspace managers and super
+    admins keep access to every task of their projects.
+    """
+    from projects.models import ProjectMember
+
+    if is_super_admin.test(user):
+        return ProjectMember.objects.none().values_list('project_id', flat=True)
+    return (
+        ProjectMember.objects.filter(user=user, role=ProjectRole.ANNOTATOR, enabled=True, deleted_at__isnull=True)
+        .exclude(project__workspace_id__in=_managed_workspace_ids(user))
+        .values_list('project_id', flat=True)
+    )
+
+
+def is_assignment_scoped(user, project):
+    """True if ``user`` sees only their assigned tasks in ``project`` (see above)."""
+    if not user or not user.is_authenticated:
+        return False
+    return assignment_scoped_project_ids(user).filter(project_id=project.id).exists()
+
+
+def project_tasks(user, project, queryset):
+    """Scope a project's tasks to those ``user`` may work on (see ``visible_tasks``)."""
+    return visible_tasks(user, queryset, project=project)
+
+
+def visible_tasks(user, queryset=None, project=None):
+    """Apply organization, project and assignment visibility to task access.
+
+    Each task has at most one assignee. Annotators see only the tasks assigned to them;
+    unassigned tasks stay hidden from them until a project manager assigns them.
+    """
+    from tasks.models import Task
+
+    if queryset is None:
+        queryset = Task.objects.all()
+    if not user or not user.is_authenticated:
+        return queryset.none()
+    queryset = queryset.filter(project__in=visible_projects(user))
+    if project is not None:
+        queryset = queryset.filter(project=project)
+    return queryset.filter(~Q(project_id__in=assignment_scoped_project_ids(user)) | Q(assignee=user))
 
 
 def _manages_a_workspace(user):

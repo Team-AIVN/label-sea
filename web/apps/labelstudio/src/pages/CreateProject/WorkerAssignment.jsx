@@ -93,11 +93,13 @@ export const WorkerAssignment = ({ projectId, workspaceId, show = true }) => {
     for (const m of assigned) map.set(m.user, m.role);
     return map;
   }, [assigned]);
+  // Every active membership, including roles without a box here (e.g. project manager):
+  // POST rejects users already on the project, so dropping them into a box changes the role.
   const memberIdByUser = useMemo(() => {
     const map = new Map();
-    for (const m of assigned) map.set(m.user, m.id);
+    for (const m of projectMembers) map.set(m.user, m.id);
     return map;
-  }, [assigned]);
+  }, [projectMembers]);
   const assignedUserIds = useMemo(() => new Set(assigned.map((m) => m.user)), [assigned]);
 
   // Left pool = workspace members not yet assigned (respecting search).
@@ -117,21 +119,37 @@ export const WorkerAssignment = ({ projectId, workspaceId, show = true }) => {
 
       if (ROLE_IDS.has(zone)) {
         if (roleByUser.get(uid) === zone) return; // dropped back in same box
-        const res = await api.callApi("createProjectMember", {
-          params: { pk: projectId },
-          body: { user: uid, role: zone }, // POST upserts the (user, project) role
-        });
-        if (res && res.error) {
+        const memberPk = memberIdByUser.get(uid);
+        // Already on the project: change the role. Otherwise add them.
+        const res = memberPk
+          ? await api.callApi("updateProjectMember", {
+              params: { pk: projectId, memberPk },
+              body: { role: zone },
+              errorFilter: () => true,
+            })
+          : await api.callApi("createProjectMember", {
+              params: { pk: projectId },
+              body: { user: uid, role: zone },
+              errorFilter: () => true,
+            });
+        if (!res?.$meta?.ok) {
           toast.show({ message: t("assign.actionFailed", "Could not update assignment"), type: "error" });
         } else {
           toast.show({ message: t("assign.added", "Workers assigned") });
         }
         await loadProjectMembers();
       } else if (zone === POOL) {
+        if (!roleByUser.has(uid)) return; // wasn't in a role box
         const memberPk = memberIdByUser.get(uid);
-        if (!memberPk) return; // wasn't assigned
-        await api.callApi("deleteProjectMember", { params: { pk: projectId, memberPk } });
-        toast.show({ message: t("assign.removed", "Workers removed") });
+        const res = await api.callApi("deleteProjectMember", {
+          params: { pk: projectId, memberPk },
+          errorFilter: () => true,
+        });
+        if (!res?.$meta?.ok) {
+          toast.show({ message: t("assign.actionFailed", "Could not update assignment"), type: "error" });
+        } else {
+          toast.show({ message: t("assign.removed", "Workers removed") });
+        }
         await loadProjectMembers();
       }
     },

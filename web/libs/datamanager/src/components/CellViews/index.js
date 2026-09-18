@@ -5,6 +5,7 @@ export {
   Annotators,
   Annotators as Reviewers,
   Annotators as ReviewedBy,
+  Annotators as Labeler,
   Annotators as UpdatedBy,
   Annotators as CommentAuthors,
 } from "./Annotators/Annotators";

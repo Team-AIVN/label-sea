@@ -19,7 +19,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.views import APIView
-from users.rules import is_project_manager_of, is_super_admin
+from users.rules import is_project_manager_of, is_super_admin, visible_tasks
 
 
 def _require_project_manager(user, project):
@@ -406,7 +406,10 @@ class MLBackendInteractiveAnnotating(APIView):
         return Response({'errors': [message]}, status=status.HTTP_200_OK)
 
     def _get_task(self, ml_backend, validated_data):
-        return generics.get_object_or_404(Task, pk=validated_data['task'], project=ml_backend.project)
+        # Labelers may run interactive predictions only on the tasks assigned to them.
+        return generics.get_object_or_404(
+            visible_tasks(self.request.user), pk=validated_data['task'], project=ml_backend.project
+        )
 
     def _get_credentials(self, request, context, project):
         if flag_set('ff_back_dev_2362_project_credentials_060722_short', request.user):

@@ -797,9 +797,14 @@ export class LSFWrapper {
 
     const api = this.datamanager.api;
     const projectId = this.project.id;
+    const taskID = this.task?.id;
     const fileuri = btoa(url);
 
-    return api.createUrl(api.endpoints.presignUrlForProject, { projectId, fileuri }).url;
+    // A project-level resolver can presign every file in its storage. Once a task is
+    // loaded, resolve through it so assignment visibility is enforced for labelers.
+    return taskID
+      ? api.createUrl(api.endpoints.presignUrlForTask, { taskID, fileuri }).url
+      : api.createUrl(api.endpoints.presignUrlForProject, { projectId, fileuri }).url;
   };
 
   onStorageInitialized = async (ls) => {

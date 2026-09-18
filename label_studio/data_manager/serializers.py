@@ -451,6 +451,7 @@ class DataManagerTaskSerializer(TaskSerializer):
     completed_at = serializers.DateTimeField(required=False)
     reviewed_at = serializers.DateTimeField(required=False)
     reviewed_by = serializers.SerializerMethodField(required=False)
+    labeler = serializers.SerializerMethodField(required=False)
     reviews = serializers.SerializerMethodField(required=False)
     annotations_results = serializers.SerializerMethodField(required=False)
     predictions_results = serializers.SerializerMethodField(required=False)
@@ -469,8 +470,13 @@ class DataManagerTaskSerializer(TaskSerializer):
     class Meta:
         model = Task
         ref_name = 'data_manager_task_serializer'
-        exclude = ('precomputed_agreement', 'allow_skip')
+        exclude = ('precomputed_agreement', 'allow_skip', 'assignee', 'assigned_at', 'assigned_by')
         expandable_fields = {'annotations': (AnnotationSerializer, {'many': True})}
+
+    @staticmethod
+    def get_labeler(obj):
+        # Assigned labeler (Task.assignee) -> single-element list for the user-list cell.
+        return [obj.assignee_id] if obj.assignee_id else []
 
     def to_representation(self, obj):
         """Dynamically manage including of some fields in the API result"""

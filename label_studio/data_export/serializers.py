@@ -102,7 +102,8 @@ class BaseExportDataSerializer(FlexFieldsModelSerializer):
 
     class Meta:
         model = Task
-        exclude = ('overlap', 'is_labeled', 'precomputed_agreement')
+        # Labeler assignment is internal to the service; keep it out of exported task files.
+        exclude = ('overlap', 'is_labeled', 'precomputed_agreement', 'assignee', 'assigned_at', 'assigned_by')
         expandable_fields = {
             'drafts': (AnnotationDraftSerializer, {'many': True}),
             'predictions': (PredictionSerializer, {'many': True}),

@@ -26,6 +26,8 @@ from projects.models import Project, ProjectMember
 from projects.serializers import ProjectMemberSerializer
 from rest_framework import generics
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from tasks.models import Task
+from users.constants import ProjectRole
 from users.rules import is_project_manager_of, is_super_admin
 
 
@@ -34,6 +36,20 @@ def _active_org_or_400(user):
     if org is None:
         raise ValidationError('User has no active organization; cannot access project members.')
     return org
+
+
+def _release_task_assignments(member):
+    """Unassign the member's tasks once they are no longer an active annotator.
+
+    Only active annotators can hold task assignments. Clearing them lets the project
+    manager see those tasks as unassigned and hand them to someone else, instead of
+    leaving them pinned to a user who can no longer work on them.
+    """
+    if member.role == ProjectRole.ANNOTATOR and member.enabled and member.deleted_at is None:
+        return 0
+    return Task.objects.filter(project_id=member.project_id, assignee_id=member.user_id).update(
+        assignee=None, assigned_at=None, assigned_by=None
+    )
 
 
 class _ProjectScopedMixin(GetParentObjectMixin):
@@ -87,11 +103,17 @@ class ProjectMembersAPI(_ProjectScopedMixin, generics.ListCreateAPIView):
         user = serializer.validated_data['user']
         role = serializer.validated_data.get('role') or ProjectMember._meta.get_field('role').default
 
+        # One active membership per (user, project). Assigning someone who is already on
+        # the project is rejected; changing their role goes through PATCH on the member
+        # detail endpoint, so the audit log records a role change instead of a new grant.
+        existing = ProjectMember.objects.filter(user=user, project=project).order_by('-id').first()
+        if existing is not None and existing.deleted_at is None:
+            raise ValidationError({'user': '이미 이 프로젝트에 배정된 멤버입니다. 역할 변경은 기존 배정에서 하세요.'})
+
         # Resurrect a soft-deleted row rather than spawning a duplicate — the
         # unique-active constraint (`uniq_active_project_member`) forbids two
         # active rows for the same (user, project), and we want the audit trail
         # chained on the original row.
-        existing = ProjectMember.objects.filter(user=user, project=project).order_by('-id').first()
         if existing is not None:
             existing.role = role
             existing.deleted_at = None
@@ -104,6 +126,9 @@ class ProjectMembersAPI(_ProjectScopedMixin, generics.ListCreateAPIView):
         else:
             member = serializer.save(project=project)
             action = AuditAction.ROLE_GRANTED
+
+        # A revived membership may come back with a non-annotator role.
+        _release_task_assignments(member)
 
         # Assigning someone to a project also makes them a member of the project's
         # workspace (low-privilege 'member'), so a manager can add people straight
@@ -166,11 +191,16 @@ class ProjectMemberDetailAPI(_ProjectScopedMixin, generics.RetrieveUpdateDestroy
         project = self._get_project()
         return project.members.all()
 
+    @transaction.atomic
     def perform_update(self, serializer):
         project = self._get_project()
         self._require_manager(project)
+        new_user = serializer.validated_data.get('user')
+        if new_user is not None and new_user.pk != serializer.instance.user_id:
+            raise ValidationError({'user': '배정된 사용자는 바꿀 수 없습니다. 다른 사용자는 새로 배정하세요.'})
         previous_role = getattr(serializer.instance, 'role', None)
         member = serializer.save()
+        _release_task_assignments(member)
         new_role = getattr(member, 'role', None)
         if previous_role != new_role:
             record_role_change(
@@ -184,6 +214,7 @@ class ProjectMemberDetailAPI(_ProjectScopedMixin, generics.RetrieveUpdateDestroy
                 organization=project.organization,
             )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         project = self._get_project()
         self._require_manager(project)
@@ -202,3 +233,4 @@ class ProjectMemberDetailAPI(_ProjectScopedMixin, generics.RetrieveUpdateDestroy
         instance.deleted_by = self.request.user
         instance.enabled = False
         instance.save(update_fields=['deleted_at', 'deleted_by', 'enabled', 'updated_at'])
+        _release_task_assignments(instance)

@@ -21,7 +21,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
-from users.rules import can_create_workspace
+from users.rules import can_create_workspace, visible_projects
 
 from organizations.models import OrganizationMember
 
@@ -75,26 +75,21 @@ class WorkspaceListAPI(generics.ListCreateAPIView):
 
     def get_queryset(self):
         from django.db.models import Count, Q
+        from users.rules import is_super_admin
 
         from users.rules import is_super_admin
 
         org = _active_org_or_400(self.request.user)
         qs = Workspace.objects.filter(organization=org)
-
-        # Membership scoping, same rule as the detail endpoint: a workspace a user doesn't
-        # belong to must not show up at all — not even its title. Only super admins get the
-        # whole organization, since they are the ones who administer it.
-        #
-        # Filtered with a subquery rather than a join on `members`, so the project count
-        # annotation below isn't multiplied by the number of membership rows.
+        # List only workspaces the user can open: every workspace-scoped endpoint requires
+        # membership (_WorkspaceScopedMixin), so listing the rest only leads to 403s.
+        # Super admins see every workspace in the organization.
         if not is_super_admin.test(self.request.user):
             qs = qs.filter(
                 id__in=WorkspaceMember.objects.filter(
-                    user=self.request.user,
-                    deleted_at__isnull=True,
+                    user=self.request.user, deleted_at__isnull=True
                 ).values('workspace_id')
             )
-
         # Annotate the active project count so the serializer doesn't COUNT per row.
         return qs.annotate(
             active_project_count=Count('projects', filter=Q(projects__deleted_at__isnull=True))
@@ -341,8 +336,7 @@ class WorkspaceProjectsAPI(_WorkspaceScopedMixin, generics.ListCreateAPIView):
     }
 
     def get_queryset(self):
-        from projects.models import Project, ProjectMember
-        from users.rules import is_super_admin, is_workspace_manager_of
+        from projects.models import Project
 
         workspace = self._get_workspace()
         # with_counts() is a manager method (adds task_number / finished_task_number
@@ -355,13 +349,7 @@ class WorkspaceProjectsAPI(_WorkspaceScopedMixin, generics.ListCreateAPIView):
             .filter(workspace=workspace, deleted_at__isnull=True)
         )
 
-        # Workers see only projects they belong to; managers (WM/SA) see all.
-        user = self.request.user
-        if not (is_super_admin.test(user) or is_workspace_manager_of.test(user, workspace)):
-            member_ids = ProjectMember.objects.filter(user=user, deleted_at__isnull=True).values_list(
-                'project_id', flat=True
-            )
-            qs = qs.filter(id__in=member_ids)
+        qs = visible_projects(self.request.user, qs)
 
         params = self.request.query_params
         search = params.get('search')

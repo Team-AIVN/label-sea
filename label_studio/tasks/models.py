@@ -91,6 +91,26 @@ class Task(TaskMixin, FsmHistoryStateModel):
         verbose_name=_('updated by'),
         help_text='Last annotator or reviewer who updated this task',
     )
+    assignee = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name='assigned_tasks',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name=_('assignee'),
+        help_text='Labeler this task is assigned to. Null means unassigned.',
+    )
+    assigned_at = models.DateTimeField(_('assigned at'), null=True, blank=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name='tasks_assigned_by',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_('assigned by'),
+        help_text='User who most recently assigned this task.',
+    )
     is_labeled = models.BooleanField(
         _('is_labeled'),
         default=False,
@@ -206,6 +226,7 @@ class Task(TaskMixin, FsmHistoryStateModel):
         db_table = 'task'
         indexes = [
             models.Index(fields=['project', 'is_labeled']),
+            models.Index(fields=['project', 'assignee'], name='task_project_assignee_idx'),
             models.Index(fields=['project', 'inner_id']),
             models.Index(fields=['id', 'project']),
             models.Index(fields=['id', 'overlap']),

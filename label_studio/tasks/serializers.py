@@ -62,6 +62,29 @@ class PredictionResultField(serializers.JSONField):
     pass
 
 
+def _validate_immutable_relations(instance, data, *fields):
+    """Prevent update endpoints from moving a child object to another parent."""
+    if instance is None:
+        return
+
+    errors = {}
+    for field in fields:
+        if field not in data:
+            continue
+        value = data[field]
+        value_id = value.pk if value is not None else None
+        if value_id != getattr(instance, f'{field}_id'):
+            errors[field] = 'This field cannot be changed after creation.'
+    if errors:
+        raise ValidationError(errors)
+
+
+def _relation_value(instance, data, field):
+    if field in data:
+        return data[field]
+    return getattr(instance, field, None) if instance is not None else None
+
+
 @extend_schema_field(
     {
         'type': 'array',
@@ -90,11 +113,13 @@ class PredictionSerializer(ModelSerializer):
 
     def validate(self, data):
         """Validate prediction using LabelInterface against project configuration"""
-        project = None
-        if 'task' in data:
-            project = data['task'].project
-        elif 'project' in data:
-            project = data['project']
+        _validate_immutable_relations(self.instance, data, 'task', 'project')
+        task = _relation_value(self.instance, data, 'task')
+        project = _relation_value(self.instance, data, 'project')
+        if task is not None:
+            if project is not None and project.pk != task.project_id:
+                raise ValidationError({'project': 'Project must match the task project.'})
+            project = task.project
         ff_user = project.organization.created_by if project else 'auto'
 
         if not flag_set('fflag_feat_utc_210_prediction_validation_15082025', user=ff_user):
@@ -176,6 +201,14 @@ class AnnotationSerializer(FlexFieldsModelSerializer):
             raise ValidationError('annotation "result" field in annotation must be list')
 
         return data
+
+    def validate(self, data):
+        _validate_immutable_relations(self.instance, data, 'task', 'project')
+        task = _relation_value(self.instance, data, 'task')
+        project = _relation_value(self.instance, data, 'project')
+        if task is not None and project is not None and project.pk != task.project_id:
+            raise ValidationError({'project': 'Project must match the task project.'})
+        return super().validate(data)
 
     def get_created_username(self, annotation) -> str:
         user = annotation.completed_by
@@ -279,7 +312,7 @@ class TaskSimpleSerializer(FlexFieldsModelSerializer):
 
     class Meta:
         model = Task
-        exclude = ('precomputed_agreement', 'allow_skip')
+        exclude = ('precomputed_agreement', 'allow_skip', 'assignee', 'assigned_at', 'assigned_by')
 
 
 class BaseTaskSerializer(FlexFieldsModelSerializer):
@@ -339,7 +372,7 @@ class BaseTaskSerializer(FlexFieldsModelSerializer):
 
     class Meta:
         model = Task
-        exclude = ('precomputed_agreement', 'allow_skip')
+        exclude = ('precomputed_agreement', 'allow_skip', 'assignee', 'assigned_at', 'assigned_by')
 
 
 class BaseTaskSerializerBulk(serializers.ListSerializer):
@@ -839,7 +872,7 @@ class TaskWithAnnotationsSerializer(TaskSerializer):
         model = Task
         list_serializer_class = load_func(settings.TASK_SERIALIZER_BULK)
 
-        exclude = ()
+        exclude = ('assignee', 'assigned_at', 'assigned_by')
 
 
 class AnnotationDraftSerializer(ModelSerializer):
@@ -866,6 +899,14 @@ class AnnotationDraftSerializer(ModelSerializer):
             name = name + ' ' + last_name
         name += (' ' if name else '') + f'{user.email}, {user.id}'
         return name
+
+    def validate(self, data):
+        _validate_immutable_relations(self.instance, data, 'task', 'annotation')
+        task = _relation_value(self.instance, data, 'task')
+        annotation = _relation_value(self.instance, data, 'annotation')
+        if task is not None and annotation is not None and annotation.task_id != task.pk:
+            raise ValidationError({'annotation': 'Annotation must belong to the draft task.'})
+        return super().validate(data)
 
     def to_representation(self, obj):
         """Remove state field if feature flags are disabled"""
