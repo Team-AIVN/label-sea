@@ -8,6 +8,9 @@
  * 이 스크립트는 그 다음부터를 전부 공개 REST API 로 한다 — 실제 사용자가 화면에서
  * 하는 것과 같은 경로라서, 시드 자체가 API 스모크 테스트 역할도 한다.
  *
+ * 주의: 워크스페이스 목록이 멤버십으로 걸러지므로(feat/workspace-list-membership-filter),
+ * 시드는 각 워크스페이스의 매니저 계정으로 그 워크스페이스를 찾는다.
+ *
  * 멱등성: [E2E] 로 시작하는 프로젝트/태스크 풀은 매 실행마다 지우고 새로 만든다.
  *         워크스페이스와 계정은 유지한다.
  *
@@ -71,10 +74,17 @@ const cleanWorkspace = async (client, workspaceId) => {
     }
   }
 
-  // 워크스페이스 멤버십은 여기서 건드리지 않는다.
-  // API 로 멤버를 해제하면 그 사람을 다시 프로젝트 멤버로 배정할 때 서버가 500 을 낸다
-  // (알려진 버그 — tests/api/01-access-control.spec.js 의 TC-AC-014 참고).
-  // 멤버십이 어긋났을 때는 seed/bootstrap.sh 가 DB 레벨에서 정리한다.
+  // 매니저 외의 워크스페이스 멤버는 해제한다.
+  // 프로젝트 멤버로 배정하면 워크스페이스 멤버가 자동으로 추가되므로(members_api.py 의
+  // _ensure_workspace_membership), 이전 실행이 남긴 멤버십을 지우지 않으면
+  // "비멤버" 접근 거부 테스트가 다음 실행에서 깨진다.
+  const members = await client.get(`/api/workspaces/${workspaceId}/members/`);
+  for (const member of members) {
+    if (member.role !== 'workspace_manager') {
+      await client.del(`/api/workspaces/${workspaceId}/members/${member.id}/`);
+      log(`  - 워크스페이스 멤버 해제: ${member.user_detail?.email ?? member.user}`);
+    }
+  }
 };
 
 /**

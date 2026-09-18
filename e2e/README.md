@@ -10,6 +10,10 @@
 
 서버가 떠 있어야 합니다 (이 폴더는 서버를 띄우지 않습니다).
 
+> 이 스위트는 다음 두 패치가 반영된 백엔드를 전제로 합니다 —
+> `feat/workspace-list-membership-filter`(워크스페이스 목록 멤버십 필터), `fix/workspace-member-reinvite-500`.
+> 패치 이전 이미지로 뜬 서버에 돌리면 `TC-AC-005`, `TC-AC-014`가 실패합니다. 코드 변경 후에는 이미지를 다시 빌드해야 합니다.
+
 ```bash
 docker compose up -d          # 저장소 루트에서
 ```
