@@ -79,12 +79,18 @@ test.describe('TC-AC 접근 권한', () => {
     expect(wm1Titles).not.toContain(WORKSPACES.wsB.title);
   });
 
-  test('TC-AC-006 비멤버는 프로젝트를 수정할 수 없다 (403)', async () => {
+  test('TC-AC-006 비멤버는 프로젝트를 볼 수도, 수정할 수도 없다 (404)', async () => {
+    // feat/task-assignment 이후 프로젝트 조회 범위가 멤버십 기준으로 좁혀져(users.rules.visible_projects),
+    // 비멤버에게는 프로젝트가 아예 없는 것처럼 보인다 — 예전에는 조회 200 / 수정 403 이었다.
     const annotator3 = await as('annotator3');
-    const res = await annotator3.raw('PATCH', `/api/projects/${projectId('a1')}/`, {
+
+    const read = await annotator3.raw('GET', `/api/projects/${projectId('a1')}/`);
+    expect(read.status).toBe(404);
+
+    const write = await annotator3.raw('PATCH', `/api/projects/${projectId('a1')}/`, {
       json: { title: '침입자가 바꾼 제목' },
     });
-    expect(res.status).toBe(403);
+    expect(write.status).toBe(404);
   });
 
   test('TC-AC-007 작업자는 멤버 배정을 바꿀 수 없다 (403)', async () => {
@@ -113,10 +119,11 @@ test.describe('TC-AC 접근 권한', () => {
     expect(after.map((m) => m.user)).not.toContain(target);
   });
 
-  test('TC-AC-009 검수자는 배정되지 않은 프로젝트의 검수 대상을 조회할 수 없다 (403)', async () => {
+  test('TC-AC-009 검수자는 배정되지 않은 프로젝트의 검수 대상을 조회할 수 없다 (404)', async () => {
+    // 검수 API 도 visible_projects 를 거치므로, 배정되지 않은 프로젝트는 404 로 숨는다.
     const reviewer2 = await as('reviewer2'); // 워크스페이스 B 전용 검수자
     const res = await reviewer2.raw('GET', `/api/projects/${projectId('a1')}/review/candidates/`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
   test('TC-AC-010 검수자는 배정된 프로젝트의 검수 대상을 조회할 수 있다', async () => {

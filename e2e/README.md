@@ -18,6 +18,25 @@
 docker compose up -d          # 저장소 루트에서
 ```
 
+**소스 코드로 직접 돌리기** (도커 이미지를 다시 굽지 않고 최신 코드를 테스트할 때):
+
+```bash
+# 1) 서버 (sqlite, 스크래치 데이터 디렉터리)
+cd label_studio
+DJANGO_DB=sqlite LABEL_STUDIO_BASE_DATA_DIR=/tmp/ls-data ../.venv/bin/python manage.py migrate
+DJANGO_DB=sqlite LABEL_STUDIO_BASE_DATA_DIR=/tmp/ls-data ../.venv/bin/python manage.py runserver 0.0.0.0:8099 --noreload
+
+# 2) 시드 (bootstrap 은 로컬 manage.py 로 돌도록 E2E_LOCAL_MANAGE=1)
+bash e2e/seed/signup.sh http://localhost:8099
+E2E_LOCAL_MANAGE=1 DJANGO_DB=sqlite LABEL_STUDIO_BASE_DATA_DIR=/tmp/ls-data bash e2e/seed/bootstrap.sh
+
+# 3) 실행
+cd e2e && LS_BASE_URL=http://localhost:8099 npm test
+```
+
+UI 테스트는 `web/dist` 의 프론트엔드 빌드를 그대로 씁니다. 번들이 오래됐으면 화면 텍스트가
+영어로 나오거나 최신 화면이 없어서 실패합니다 — `cd web && yarn run build` 로 다시 빌드하세요.
+
 처음 한 번만:
 
 ```bash
@@ -37,7 +56,7 @@ npm run seed:bootstrap        # 워크스페이스 2개 생성 + WM1/WM2를 매�
 
 ```bash
 npm test                      # 전체 (API + UI). 실행 전에 목 데이터를 자동으로 다시 시드
-npm run test:api              # 권한/워크플로 (브라우저 없이 빠르게)
+npm run test:api              # 권한/워크플로/태스크 할당 (브라우저 없이 빠르게)
 npm run test:ui               # 화면 조작
 npm run test:headed           # 브라우저를 띄워서 눈으로 보기
 npm run report                # 마지막 실행 리포트
@@ -69,8 +88,8 @@ e2e/
 │   ├── seed.mjs         작업집합·프로젝트·멤버 배정 (REST API)
 │   └── seeded.json      생성 결과 (자동 생성)
 ├── tests/
-│   ├── api/             TC-AC 접근 권한, TC-WF 작업·검수 워크플로
-│   └── ui/              TC-UI 화면 조작
+│   ├── api/             TC-AC 접근 권한, TC-WF 작업·검수 워크플로, TC-TA 태스크 라벨러 할당
+│   └── ui/              TC-UI 화면 조작 (탐색 / 라벨링·검수 / 라벨러 할당)
 ├── global-setup.mjs     재시드 + 계정별 로그인 세션 준비
 └── playwright.config.js
 ```

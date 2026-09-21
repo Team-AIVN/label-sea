@@ -9,16 +9,28 @@
 #   관리자 권한으로 만들어 줘야 한다. 이 단계 이후로는 WM1/WM2 가 API 로
 #   워크스페이스를 더 만들 수 있다(TC-WS-005 가 그걸 검증한다).
 #
-# 전제: docker compose 로 app/db 가 떠 있고, 계정 11개가 이미 가입되어 있을 것.
-#       (계정 생성은 seed/signup.sh)
+# 전제: 서버가 떠 있고, 계정 11개가 이미 가입되어 있을 것 (계정 생성은 seed/signup.sh).
+#
+# 실행 대상 두 가지:
+#   docker  (기본)  docker compose 의 app 컨테이너에서 manage.py 를 돌린다.
+#   로컬     E2E_LOCAL_MANAGE=1  로컬 가상환경(.venv)의 manage.py 를 직접 돌린다.
+#            소스에서 개발 서버를 띄워 테스트할 때 쓴다. 필요하면 DJANGO_DB /
+#            LABEL_STUDIO_BASE_DATA_DIR 을 함께 넘긴다.
 #
 # 사용법:  e2e/seed/bootstrap.sh
+#          E2E_LOCAL_MANAGE=1 DJANGO_DB=sqlite e2e/seed/bootstrap.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-docker compose exec -T -w /label-studio/label_studio app python manage.py shell -c '
+if [ "${E2E_LOCAL_MANAGE:-0}" = "1" ]; then
+  run_shell() { (cd "$REPO_ROOT/label_studio" && "$REPO_ROOT/.venv/bin/python" manage.py shell -c "$1"); }
+else
+  run_shell() { docker compose exec -T -w /label-studio/label_studio app python manage.py shell -c "$1"; }
+fi
+
+run_shell '
 from django.contrib.auth import get_user_model
 from organizations.models import Organization
 from workspaces.models import Workspace, WorkspaceMember

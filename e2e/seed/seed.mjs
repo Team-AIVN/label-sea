@@ -1,5 +1,5 @@
 /**
- * 목 데이터 시드: 워크스페이스 2개 × 프로젝트 2개 + 태스크 풀 + 멤버 배정.
+ * 목 데이터 시드: 워크스페이스 2개 × 프로젝트 2개 + 태스크 풀 + 멤버 배정 + 태스크 할당.
  *
  * 전제:
  *   1) e2e/seed/signup.sh   — 계정 11개
@@ -143,7 +143,47 @@ const createProject = async (client, workspaceId, project, userIdByKey) => {
   const tasks = await client.get(`/api/projects/${created.id}/tasks/?page_size=100`);
   const taskCount = Array.isArray(tasks) ? tasks.length : (tasks.tasks?.length ?? tasks.count ?? 0);
   log(`    태스크 ${taskCount}건 생성됨`);
-  return { id: created.id, taskCount };
+
+  const assignments = await assignTasks(client, created.id, project, userIdByKey);
+  return { id: created.id, taskCount, assignments };
+};
+
+/**
+ * 태스크를 라벨러에게 나눠 할당한다 (Data Manager 의 '라벨러 할당' 액션과 같은 경로).
+ *
+ * 왜 시드에서 해야 하는가: 라벨러는 자기에게 할당된 태스크만 보고 받을 수 있다
+ * (users.rules.visible_tasks). 할당하지 않으면 작업자가 태스크를 하나도 받지 못해
+ * 라벨링·검수 시나리오가 성립하지 않는다.
+ */
+const assignTasks = async (client, projectId, project, userIdByKey) => {
+  const annotators = Object.entries(project.members)
+    .filter(([, role]) => role === 'annotator')
+    .map(([key]) => key);
+  if (annotators.length === 0) return {};
+
+  const list = await client.get(`/api/tasks/?project=${projectId}&page_size=1000`);
+  const taskIds = (list.tasks ?? []).map((t) => t.id);
+
+  // 라벨러 수만큼 연속 구간으로 나눈다 — 누가 어느 태스크를 받았는지 테스트에서 예측 가능하게.
+  const perLabeler = Math.floor(taskIds.length / annotators.length);
+  const assignments = {};
+  for (const [index, accountKey] of annotators.entries()) {
+    const slice =
+      index === annotators.length - 1
+        ? taskIds.slice(index * perLabeler)
+        : taskIds.slice(index * perLabeler, (index + 1) * perLabeler);
+    const result = await client.post(
+      `/api/dm/actions/?id=assign_tasks&project=${projectId}`,
+      { selectedItems: { all: false, included: slice }, labeler: String(userIdByKey[accountKey]) },
+    );
+    assignments[accountKey] = { count: result.processed_items, taskIds: slice };
+  }
+  log(
+    `    태스크 할당: ${Object.entries(assignments)
+      .map(([k, v]) => `${k}=${v.count}건`)
+      .join(', ')}`,
+  );
+  return assignments;
 };
 
 const main = async () => {
@@ -179,6 +219,7 @@ const main = async () => {
         poolId: pool.id,
         taskCount: created.taskCount,
         reviewStrategy: project.reviewStrategy,
+        assignments: created.assignments,
       };
     }
   }
