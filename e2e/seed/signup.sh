@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 목 계정 11개를 /user/signup/ 폼으로 가입시킨다 (이미 있으면 그냥 실패 메시지가 뜨고 넘어감).
+# 목 계정 12개를 /user/signup/ 폼으로 가입시킨다 (이미 있으면 그냥 실패 메시지가 뜨고 넘어감).
 # 화면에서 가입하는 것과 같은 뷰·같은 검증을 거친다.
 #
 # 역할 → 이메일 규칙: localtest_{역할}@test.com
@@ -31,6 +31,8 @@ signup() {
   rm -f "$jar"
 }
 
+# admin 을 먼저 가입시킨다 — 빈 DB 라면 이 계정이 조직 소유자(슈퍼 관리자)가 된다.
+signup localtest_admin@test.com "관리자"
 signup localtest_annotator1@test.com "작업자1"
 signup localtest_annotator2@test.com "작업자2"
 signup localtest_annotator3@test.com "작업자3"

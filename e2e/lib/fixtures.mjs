@@ -13,10 +13,17 @@ export const PASSWORD = 'test1234';
 const account = (key, email, name) => ({ key, email, name, password: PASSWORD });
 
 /**
- * 계정 11개. email 은 localtest_{역할}@test.com 규칙을 따른다.
+ * 계정 12개. email 은 localtest_{역할}@test.com 규칙을 따른다.
  * (한글은 이메일 로컬파트에 쓸 수 없어 작업자→annotator, 검수자→reviewer 로 표기)
+ *
+ * admin 은 맨 먼저 가입시킨다: 빈 DB 에서는 첫 가입자가 조직을 만들면서
+ * 그 조직의 소유자(= 슈퍼 관리자)가 되기 때문이다. 이 계정을 따로 두지 않으면
+ * 작업자1 이 슈퍼 관리자가 되어 권한 테스트의 기준이 통째로 무너진다.
+ * 이미 조직이 있는 서버(기존 docker DB 등)에서는 평범한 조직원으로 가입된다 —
+ * 슈퍼 관리자 여부에 기대는 테스트는 실행 시점에 확인하고 건너뛴다(isSuperAdmin).
  */
 export const ACCOUNTS = {
+  admin: account('admin', 'localtest_admin@test.com', '관리자'),
   annotator1: account('annotator1', 'localtest_annotator1@test.com', '작업자1'),
   annotator2: account('annotator2', 'localtest_annotator2@test.com', '작업자2'),
   annotator3: account('annotator3', 'localtest_annotator3@test.com', '작업자3'),
